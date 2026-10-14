@@ -1,0 +1,6 @@
+# Installing this package adds one idle Quberi controller beside the base
+# profile's command, credential and tool services. Nothing starts a listener or
+# contacts Quberi until you run /quberi login (or call the search tool).
+- insert:
+    - id: quberi
+      name: dsh-quberi
