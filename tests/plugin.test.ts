@@ -42,15 +42,22 @@ describe('plugin wiring', () => {
     expect(config.clientId).toBe('quberi-harness')
   })
 
-  it('registers one command and one read-only search tool', async () => {
+  it('registers one command, a search tool and a save tool', async () => {
     const { ctx, registered, effects } = fakeContext()
     await apply(ctx, config)
     expect(registered.commands.map((c) => c.name)).toEqual(['quberi'])
-    expect(registered.tools.map((t) => t.name)).toEqual(['quberi_search'])
+    expect(registered.tools.map((t) => t.name)).toEqual(['quberi_search', 'quberi_save'])
     expect(effects).toHaveLength(1)
-    // Only a search tool: nothing that could write, upload or delete.
-    expect(Object.keys(registered.tools[0].parameters.properties).sort()).toEqual(['query', 'top_k'])
-    expect(registered.tools[0].parameters.required).toEqual(['query'])
+
+    const search = registered.tools.find((t) => t.name === 'quberi_search')!
+    // Search reads only: it takes a query and an optional count, nothing else.
+    expect(Object.keys(search.parameters.properties).sort()).toEqual(['query', 'top_k'])
+    expect(search.parameters.required).toEqual(['query'])
+
+    const save = registered.tools.find((t) => t.name === 'quberi_save')!
+    // Save takes the note (title + text) and an optional target space name.
+    expect(Object.keys(save.parameters.properties).sort()).toEqual(['space', 'text', 'title'])
+    expect(save.parameters.required.sort()).toEqual(['text', 'title'])
   })
 
   it('refuses a non-https server address up front', async () => {

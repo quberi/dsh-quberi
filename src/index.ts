@@ -1,11 +1,11 @@
 /**
- * Search your Quberi knowledge base from DeepSeek Harness.
+ * Search and save to your Quberi knowledge base from DeepSeek Harness.
  *
  * `/quberi login` signs you in through the browser (OAuth + PKCE); after that
- * the model can call `quberi_search`. The sign-in is read-only and acts as you:
- * it can only find passages in spaces you can already read, in the one
- * organization you chose. You can disconnect it from Quberi (Account) or with
- * `/quberi logout`.
+ * the model can call `quberi_search` (read) and `quberi_save` (write). The
+ * sign-in acts as you: search finds only passages in spaces you can read, and
+ * save only writes into spaces you can edit, in the one organization you chose.
+ * You can disconnect it from Quberi (Account) or with `/quberi logout`.
  *
  * @module dsh-quberi
  */
@@ -18,7 +18,12 @@ import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-commands'
 
 import { focusHostApp, openInBrowser } from './browser.js'
-import { QuberiController, QuberiUserError, formatSearchResult } from './controller.js'
+import {
+  QuberiController,
+  QuberiUserError,
+  formatSaveResult,
+  formatSearchResult,
+} from './controller.js'
 import type { TokenStore } from './controller.js'
 import { readTokenSet } from './oauth.js'
 import type { TokenSet } from './oauth.js'
@@ -82,7 +87,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const controller = new QuberiController({
     baseUrl: config.baseUrl,
     clientId: config.clientId,
-    scope: 'knowledge:read',
+    scope: 'knowledge:read knowledge:write',
     callbackPort: config.callbackPort,
     loginTimeoutMs: config.loginTimeoutMs,
     requestTimeoutMs: config.requestTimeoutMs,
@@ -97,7 +102,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
 
   ctx.commands.register({
     name: 'quberi',
-    description: 'sign in to Quberi (read-only knowledge search) or check the connection',
+    description: 'sign in to Quberi (search and save knowledge) or check the connection',
     input: { hint: '[login|status|logout]' },
     handler: (invocation) => controller.command(invocation.rawInput),
   })
@@ -133,6 +138,57 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           if (error instanceof QuberiUserError) throw error
           if (exec.signal.aborted) throw error
           // Network and parsing details stay out of the model's context.
+          throw new Error('Quberi could not be reached or answered unexpectedly. Try again shortly.')
+        }
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'quberi_save',
+      description:
+        "Save a note into the user's Quberi knowledge base so it can be found later with quberi_search. " +
+        'Use it to keep a conclusion, decision, plan, snippet, or summary that came out of this conversation. ' +
+        'By default it goes into the user\'s personal space; pass `space` to save into a named team space they can edit. ' +
+        'The first time, it opens a browser window for the user to sign in to Quberi (granting read and save); ' +
+        'if it says the user must open a link, pass that link on. ' +
+        'Be proactive but not pushy: when the conversation produces something worth keeping, briefly offer to save it ' +
+        'and let the user confirm before calling this tool — do not save silently or repeatedly.',
+      parameters: {
+        title: {
+          type: 'string',
+          required: true,
+          description: 'A short, descriptive title for the note (becomes the document name).',
+        },
+        text: {
+          type: 'string',
+          required: true,
+          description:
+            'The note body, as Markdown. Include the content worth keeping; it may contain headings, ' +
+            'lists, code blocks, and image links. Images are stored but not yet searchable by content.',
+        },
+        space: {
+          type: 'string',
+          description:
+            'Name of the team space to save into, as the user refers to it. ' +
+            'Omit to use the user\'s personal space.',
+        },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: value }],
+      },
+      async execute(args, exec) {
+        try {
+          const result = await controller.saveNote(
+            { title: args.title, text: args.text, space: args.space },
+            exec.signal,
+          )
+          return formatSaveResult(result)
+        } catch (error) {
+          if (error instanceof QuberiUserError) throw error
+          if (exec.signal.aborted) throw error
           throw new Error('Quberi could not be reached or answered unexpectedly. Try again shortly.')
         }
       },

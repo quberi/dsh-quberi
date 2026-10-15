@@ -32,6 +32,9 @@ export interface FakeQuberi {
   /** What the next token request answers; default: success. */
   tokenAnswer?: (form: URLSearchParams) => { status: number; body: unknown }
   searchAnswer?: (auth: string) => { status: number; body: unknown }
+  saveAnswer?: (auth: string, body: string) => { status: number; body: unknown }
+  /** Scope stamped on tokens the fake issues; default read + write. */
+  grantedScope: string
   tokenCounter: number
 }
 
@@ -59,6 +62,7 @@ export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = 
   const fake: FakeQuberi = {
     calls: [],
     tokenCounter: 0,
+    grantedScope: 'knowledge:read knowledge:write',
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const headers = (init?.headers ?? {}) as Record<string, string>
@@ -79,7 +83,7 @@ export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = 
           token_type: 'Bearer',
           expires_in: 3600,
           refresh_token: `qbr_rt_${fake.tokenCounter}`,
-          scope: 'knowledge:read',
+          scope: fake.grantedScope,
         })
       }
       if (url.endsWith('/oauth/revoke')) return json(200, {})
@@ -103,6 +107,19 @@ export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = 
               score: 0.9,
             },
           ],
+        })
+      }
+      if (url.endsWith('/api/v1/external/save')) {
+        const auth = headers.Authorization ?? ''
+        if (fake.saveAnswer) {
+          const answer = fake.saveAnswer(auth, body)
+          return json(answer.status, answer.body)
+        }
+        return json(201, {
+          document_id: 'doc-1',
+          space_id: 'sp-1',
+          space_name: 'My space',
+          name: 'Note.md',
         })
       }
       return json(404, {})

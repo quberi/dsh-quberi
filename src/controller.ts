@@ -43,7 +43,11 @@ import {
 const CALLBACK_HOST = '127.0.0.1'
 const CALLBACK_PATH = '/callback'
 const SEARCH_PATH = '/api/v1/external/search'
+const SAVE_PATH = '/api/v1/external/save'
 const MAX_QUERY_CHARS = 2000
+const MAX_NOTE_TITLE_CHARS = 200
+const MAX_NOTE_TEXT_CHARS = 100_000
+const WRITE_SCOPE = 'knowledge:write'
 
 /** Where the host keeps the token set. Writes are serialized (and cross-process where possible). */
 export interface TokenStore {
@@ -100,6 +104,20 @@ export interface SearchResult {
   organization: string
   searched_spaces: number
   passages: Passage[]
+}
+
+export interface SaveResult {
+  document_id: string
+  space_id: string
+  space_name: string
+  name: string
+}
+
+export interface SaveArgs {
+  title: string
+  text: string
+  /** Target space, named the way the person does. Omit for the personal space. */
+  space?: string
 }
 
 interface PendingLogin {
@@ -194,7 +212,9 @@ export class QuberiController {
     const tokens = await this.options.store.read()
     if (tokens === undefined) return 'Not connected to Quberi. Run /quberi login.'
     const expires = new Date(tokens.expiresAt).toISOString()
-    return `Connected to Quberi (read-only search). The access token is refreshed automatically; current one expires ${expires}.`
+    const canSave = hasScope(tokens.scope, WRITE_SCOPE)
+    const what = canSave ? 'search and save' : 'read-only search (run /quberi login to add saving)'
+    return `Connected to Quberi (${what}). The access token is refreshed automatically; current one expires ${expires}.`
   }
 
   // -------------------------------------------------------------------------
@@ -530,6 +550,99 @@ export class QuberiController {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Save a note
+  // -------------------------------------------------------------------------
+
+  async saveNote(args: SaveArgs, signal?: AbortSignal): Promise<SaveResult> {
+    const title = (args.title ?? '').trim()
+    const text = (args.text ?? '').trim()
+    if (title.length === 0) throw new QuberiUserError('The note needs a title.')
+    if (text.length === 0) throw new QuberiUserError('The note is empty.')
+    if (title.length > MAX_NOTE_TITLE_CHARS) {
+      throw new QuberiUserError(`The note title is longer than ${MAX_NOTE_TITLE_CHARS} characters.`)
+    }
+    if (text.length > MAX_NOTE_TEXT_CHARS) {
+      throw new QuberiUserError(`The note is longer than ${MAX_NOTE_TEXT_CHARS} characters.`)
+    }
+    const space = args.space?.trim()
+
+    await this.connectIfNeeded(signal)
+    let tokens = await this.freshTokens()
+    // Saving needs a write grant. An older sign-in only has knowledge:read, so
+    // tell the person to sign in again rather than let the server 403.
+    if (!hasScope(tokens.scope, WRITE_SCOPE)) {
+      throw new QuberiUserError(
+        'This Quberi sign-in can only read. Run /quberi login to grant saving (it will ask for read and write).',
+      )
+    }
+
+    const payload: Record<string, string> = { title, text }
+    if (space) payload.space = space
+
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await this.request(
+        `${this.baseUrl}${SAVE_PATH}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.accessToken}` },
+          body: JSON.stringify(payload),
+        },
+        signal,
+      )
+      if (response.status === 401 && attempt === 0) {
+        tokens = await this.freshTokens(tokens.accessToken)
+        continue
+      }
+      return this.readSaveResponse(response)
+    }
+  }
+
+  private async readSaveResponse(response: Awaited<ReturnType<typeof fetch>>): Promise<SaveResult> {
+    const raw = await response.text()
+    if (response.ok) {
+      const body = parseJsonObject(raw, 'Quberi save response')
+      return {
+        document_id: typeof body.document_id === 'string' ? body.document_id : '',
+        space_id: typeof body.space_id === 'string' ? body.space_id : '',
+        space_name: typeof body.space_name === 'string' ? body.space_name : '',
+        name: typeof body.name === 'string' ? body.name : '',
+      }
+    }
+    let code = ''
+    try {
+      const detail = (parseJsonObject(raw, 'Quberi error') as { detail?: unknown }).detail
+      if (typeof detail === 'object' && detail !== null) code = String((detail as { code?: unknown }).code ?? '')
+    } catch {
+      /* not JSON: fall through to the generic message */
+    }
+    if (response.status === 401) {
+      await this.options.store.clear()
+      throw new QuberiUserError('Quberi no longer accepts this sign-in. Run /quberi login.')
+    }
+    if (response.status === 403 && code === 'insufficient_scope') {
+      throw new QuberiUserError(
+        'This Quberi sign-in cannot save. Run /quberi login to grant saving, then try again.',
+      )
+    }
+    if (response.status === 403 && code === 'external_tools_disabled') {
+      throw new QuberiUserError('Your Quberi organization has turned off outside tools. Ask an owner or admin to turn them on.')
+    }
+    if (response.status === 403) {
+      throw new QuberiUserError('You can read that space but not save into it. Choose a space you can edit, or ask for access.')
+    }
+    if (response.status === 404 && code === 'space_not_found') {
+      throw new QuberiUserError('No space by that name that you can save into. Check the name, or leave it out to use your personal space.')
+    }
+    if (response.status === 400) {
+      throw new QuberiUserError('Quberi rejected the note (it may be empty or too large).')
+    }
+    if (response.status === 429) {
+      throw new QuberiUserError('Quberi is rate limiting saves from this sign-in. Wait a minute and try again.')
+    }
+    throw new QuberiUserError(`Quberi could not save the note (HTTP ${response.status}).`)
+  }
+
   /**
    * First use without a sign-in: open the browser, wait for the person to
    * approve, then carry on with the search - no separate login step.
@@ -621,9 +734,20 @@ export class QuberiController {
   }
 }
 
+/** Whether a space-separated scope string grants a given scope. */
+export function hasScope(scope: string, wanted: string): boolean {
+  return scope.split(/\s+/u).includes(wanted)
+}
+
 // ---------------------------------------------------------------------------
 // Turning a result into text for the model
 // ---------------------------------------------------------------------------
+
+/** A short confirmation of a saved note, naming where it landed. */
+export function formatSaveResult(result: SaveResult): string {
+  const where = result.space_name ? `the "${result.space_name}" space` : 'your knowledge base'
+  return `Saved to ${where} in Quberi as "${result.name}". It can now be found with Quberi search.`
+}
 
 /** Quote the passages as data, with their sources, so the model can cite them. */
 export function formatSearchResult(query: string, result: SearchResult): string {

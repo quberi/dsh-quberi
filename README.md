@@ -1,11 +1,14 @@
 # dsh-quberi
 
-Search your [Quberi](https://ai.quberi.com) knowledge base from DeepSeek Harness.
+Search and save to your [Quberi](https://ai.quberi.com) knowledge base from
+DeepSeek Harness.
 
 Ask Harness a question about your documents. The first time, your browser
 opens by itself so you can approve access; after that the model can call
-`quberi_search`. It finds passages in the documents **you** can read in Quberi,
-in the one organization you pick. It is read-only.
+`quberi_search`, which finds passages in the documents **you** can read in
+Quberi, in the one organization you pick. It can also call `quberi_save` to add
+a note (a conclusion, decision or summary from the chat) to your knowledge base.
+Saving is new in 0.3.0 and needs a fresh approval that includes **save**.
 
 ## Install
 
@@ -29,7 +32,7 @@ Quberi server (see Configuration).
 
 A plugin runs on your machine with your permissions, so read the source first.
 It is small: `src/oauth.ts` (sign-in helpers), `src/browser.ts` (opens your
-browser), `src/controller.ts` (sign-in, token refresh, search) and
+browser), `src/controller.ts` (sign-in, token refresh, search, save) and
 `src/index.ts` (the `/quberi` command and the tool). Its only runtime
 dependency is `@deepseek-ai/schemastery`.
 
@@ -46,7 +49,7 @@ dsh plugin --profile desktop add /path/to/dsh-quberi-<version>.tgz
 
 | Command | What it does |
 |---|---|
-| `/quberi login` | Opens your browser to sign in to Quberi (the link is also shown in case it does not open). Choose an organization and allow. You rarely need this: the first search does it for you. |
+| `/quberi login` | Opens your browser to sign in to Quberi (the link is also shown in case it does not open). Choose an organization and allow. You rarely need this: the first search does it for you. If you signed in with an older version (read only), run it again to allow saving. |
 | `/quberi status` | Shows whether you are connected. Never prints a token. |
 | `/quberi logout` | Revokes the sign-in at Quberi and forgets it locally. |
 
@@ -71,16 +74,32 @@ uses. Quberi's "check before sending" step does not apply to this path. Every
 search is recorded in the organization's audit log (the tool's name and the
 documents returned, never the question or the text).
 
+## Saving notes
+
+`quberi_save` takes a title, the note text (Markdown) and, optionally, the name
+of a space. With no space it saves into **your personal space**. The tool asks
+the model to offer to save and wait for you to agree, not to save silently, but
+that is an instruction to the model, not a guarantee: you decide by what you
+approve and by watching what the model does.
+
+A saved note becomes a document in that space. **Anyone who can read that space
+can find it**, so name a shared space only on purpose. Saving is recorded in
+the audit log (the tool's name and the new document, not the text).
+
 ## What it can and cannot do
 
-- It acts as you: only spaces you can read, re-checked on every search. If your
-  access changes, the next search reflects it.
-- It cannot upload, edit or delete anything.
+- It acts as you: search only reads spaces you can read, and save only writes
+  into spaces you can edit. Both are re-checked on every call. If your access
+  changes, the next call reflects it.
+- It can add notes, nothing else. It cannot edit or delete anything that is
+  already there, and it cannot upload files.
+- Saving is a separate permission (`knowledge:write`). A sign-in made by an
+  earlier version only allows search; it is not upgraded behind your back.
 - Access tokens last one hour and refresh on their own; a sign-in lasts at most
   90 days. A refresh token that is used twice is treated as stolen and the whole
   sign-in is revoked.
 - Turning outside tools off for the organization, or disconnecting in Quberi,
-  stops the very next search.
+  stops the very next search or save.
 
 ## Configuration
 

@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   QuberiController,
   QuberiUserError,
+  formatSaveResult,
   formatSearchResult,
+  hasScope,
 } from '../src/controller.js'
 import type { ControllerOptions } from '../src/controller.js'
 
@@ -540,5 +542,115 @@ describe('signing in without a separate step', () => {
     await callback(redirect, { code: 'x', state: 'wrong' })
     await new Promise((r) => setTimeout(r, 30))
     expect(focused).toHaveLength(0)
+  })
+})
+
+describe('hasScope', () => {
+  it('matches a scope only on a whole-token boundary', () => {
+    expect(hasScope('knowledge:read knowledge:write', 'knowledge:write')).toBe(true)
+    expect(hasScope('knowledge:read', 'knowledge:write')).toBe(false)
+    expect(hasScope('', 'knowledge:write')).toBe(false)
+    // Not a substring match.
+    expect(hasScope('knowledge:write-ish', 'knowledge:write')).toBe(false)
+  })
+})
+
+describe('saveNote', () => {
+  it('signs in on first use and saves to the default space', async () => {
+    const fake = fakeQuberi()
+    const { controller, store } = make({}, fake)
+    const { state, redirect } = await startLogin(controller)
+    await callback(redirect, { code: 'c', state })
+
+    const result = await controller.saveNote({ title: 'Conclusion', text: 'We ship B.' })
+    expect(result.name).toBe('Note.md')
+
+    const save = fake.calls.find((c) => c.url.endsWith('/api/v1/external/save'))
+    expect(save).toBeDefined()
+    expect(save?.method).toBe('POST')
+    expect(save?.headers.Authorization).toBe(`Bearer ${store.value?.accessToken}`)
+    const sent = JSON.parse(save?.body ?? '{}')
+    expect(sent).toEqual({ title: 'Conclusion', text: 'We ship B.' })
+  })
+
+  it('passes a named space through', async () => {
+    const fake = fakeQuberi()
+    const { controller } = make({}, fake)
+    const { state, redirect } = await startLogin(controller)
+    await callback(redirect, { code: 'c', state })
+    await controller.saveNote({ title: 't', text: 'b', space: '产品团队' })
+    const save = fake.calls.find((c) => c.url.endsWith('/api/v1/external/save'))
+    expect(JSON.parse(save?.body ?? '{}').space).toBe('产品团队')
+  })
+
+  it('refuses to save with a read-only grant, before any network call', async () => {
+    const fake = fakeQuberi()
+    fake.grantedScope = 'knowledge:read'
+    const { controller } = make({}, fake)
+    const { state, redirect } = await startLogin(controller)
+    await callback(redirect, { code: 'c', state })
+    await expect(controller.saveNote({ title: 't', text: 'b' })).rejects.toThrow(/can only read|login/i)
+    expect(fake.calls.some((c) => c.url.endsWith('/api/v1/external/save'))).toBe(false)
+  })
+
+  it('rejects an empty title or body up front', async () => {
+    const { controller } = make()
+    await expect(controller.saveNote({ title: '  ', text: 'b' })).rejects.toThrow(QuberiUserError)
+    await expect(controller.saveNote({ title: 't', text: '   ' })).rejects.toThrow(QuberiUserError)
+  })
+
+  it('refreshes once and retries on a 401', async () => {
+    const fake = fakeQuberi()
+    let seen = 0
+    fake.saveAnswer = () => {
+      seen += 1
+      return seen === 1
+        ? { status: 401, body: { detail: { code: 'invalid_token' } } }
+        : { status: 201, body: { document_id: 'd', space_id: 's', space_name: 'X', name: 'N.md' } }
+    }
+    const { controller } = make({}, fake)
+    const { state, redirect } = await startLogin(controller)
+    await callback(redirect, { code: 'c', state })
+    const result = await controller.saveNote({ title: 't', text: 'b' })
+    expect(result.name).toBe('N.md')
+    expect(seen).toBe(2)
+  })
+
+  it('turns a 403 insufficient_scope into a sign-in-again message', async () => {
+    const fake = fakeQuberi()
+    fake.saveAnswer = () => ({ status: 403, body: { detail: { code: 'insufficient_scope' } } })
+    const { controller } = make({}, fake)
+    const { state, redirect } = await startLogin(controller)
+    await callback(redirect, { code: 'c', state })
+    await expect(controller.saveNote({ title: 't', text: 'b' })).rejects.toThrow(/login|cannot save/i)
+  })
+
+  it('turns a 404 space_not_found into a helpful message', async () => {
+    const fake = fakeQuberi()
+    fake.saveAnswer = () => ({ status: 404, body: { detail: { code: 'space_not_found' } } })
+    const { controller } = make({}, fake)
+    const { state, redirect } = await startLogin(controller)
+    await callback(redirect, { code: 'c', state })
+    await expect(controller.saveNote({ title: 't', text: 'b', space: 'nope' })).rejects.toThrow(/name|personal space/i)
+  })
+
+  it('turns a space-you-cannot-edit 403 into a helpful message', async () => {
+    const fake = fakeQuberi()
+    fake.saveAnswer = () => ({ status: 403, body: { detail: { code: 'forbidden' } } })
+    const { controller } = make({}, fake)
+    const { state, redirect } = await startLogin(controller)
+    await callback(redirect, { code: 'c', state })
+    await expect(controller.saveNote({ title: 't', text: 'b', space: 'HR' })).rejects.toThrow(/edit|access/i)
+  })
+})
+
+describe('formatSaveResult', () => {
+  it('names the space when there is one', () => {
+    expect(formatSaveResult({ document_id: 'd', space_id: 's', space_name: 'Product', name: 'Plan.md' }))
+      .toMatch(/"Product" space.*"Plan.md"/)
+  })
+  it('falls back to a generic phrase without a space name', () => {
+    expect(formatSaveResult({ document_id: 'd', space_id: 's', space_name: '', name: 'Plan.md' }))
+      .toMatch(/your knowledge base/)
   })
 })
