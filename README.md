@@ -1,6 +1,6 @@
 # dsh-quberi
 
-Search, save notes and upload files to your [Quberi](https://ai.quberi.com)
+Search, browse, save notes and upload files to your [Quberi](https://ai.quberi.com)
 knowledge base from DeepSeek Harness.
 
 Ask Harness a question about your documents. The first time, your browser
@@ -8,8 +8,10 @@ opens by itself so you can approve access; after that the model can call
 `quberi_search`, which finds passages in the documents **you** can read in
 Quberi, in the one organization you pick. It can also call `quberi_save` to add
 a note (a conclusion, decision or summary from the chat) to your knowledge base,
-and `quberi_upload_file` to add a file from your workspace. Saving is new in
-0.3.0 and uploading in 0.4.0; each needs a fresh sign-in that includes it. An
+and `quberi_upload_file` to add a file from your workspace. `quberi_list_spaces`
+and `quberi_list_documents` show what is there. Saving is new in 0.3.0 and
+uploading in 0.4.0; each needs a fresh sign-in that includes it. Browsing needs
+nothing beyond search. An
 upload only happens after **you approve that file** (see Uploading files).
 
 ## Install
@@ -88,6 +90,31 @@ approve and by watching what the model does.
 A saved note becomes a document in that space. **Anyone who can read that space
 can find it**, so name a shared space only on purpose. Saving is recorded in
 the audit log (the tool's name and the new document, not the text).
+
+## Browsing
+
+`quberi_list_spaces` lists the spaces you can read: your personal space and the
+team spaces, how many documents each holds, and whether you can edit it (so
+whether saving or uploading there would work). `quberi_list_documents` lists the
+documents in one space you name, newest first: name, type, size, last update and
+whether it is searchable yet. It returns up to 50 at a time and hands the model a
+cursor for the next page.
+
+Both show file information only. They never return what is inside a document
+(that is what search is for) and they do not say who uploaded it. They use the
+same read permission as search and the same live access rules, so a space or
+document you cannot see in Quberi is not listed. Each use is recorded in the
+audit log (which kind of listing and how many items, never the names).
+
+## How it looks in Harness
+
+Each call shows a short title while it runs (for example "Search knowledge: AI
+RMF" or "Upload file: a.pdf → your personal space") and a tidy card when it is
+done: search results grouped by document, spaces and documents as lists with
+their size, type, time and status. The model reads plain text; the cards are only
+for you, and everything that comes from your documents is shown as text, so a
+file called `![x](http://example.com)` cannot draw an image or a link. Cards use
+Chinese when your system language is Chinese, English otherwise.
 
 ## Uploading files
 

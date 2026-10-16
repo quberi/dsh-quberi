@@ -1,8 +1,8 @@
 /**
- * Search, save and upload to your Quberi knowledge base from DeepSeek Harness.
+ * Search, browse, save and upload to your Quberi knowledge base from DeepSeek Harness.
  *
  * `/quberi login` signs you in through the browser (OAuth + PKCE); after that
- * the model can call `quberi_search` (read), `quberi_save` (write) and
+ * the model can call `quberi_search` and the two listing tools (read), `quberi_save` (write) and
  * `quberi_upload_file` (upload, one workspace file at a time, each approved by
  * you first). The sign-in acts as you: search finds only passages in spaces you
  * can read, and save and upload only write into spaces you can edit, in the one
@@ -15,6 +15,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialKey } from '@deepseek-ai/dsh-credentials'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { ToolCallView, ToolResult, ToolResultView } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
 // Side-effect type import: declaration-merges `ctx.commands` onto Context.
 import type {} from '@deepseek-ai/dsh-commands'
@@ -23,13 +24,17 @@ import { focusHostApp, openInBrowser } from './browser.js'
 import {
   QuberiController,
   QuberiUserError,
+  formatDocumentsResult,
   formatSaveResult,
   formatSearchResult,
+  formatSpacesResult,
   formatUploadResult,
 } from './controller.js'
 import type { TokenStore } from './controller.js'
 import { readTokenSet } from './oauth.js'
 import type { TokenSet } from './oauth.js'
+import { callCard, detectLang, documentsCard, saveCard, searchCard, spacesCard, uploadCard } from './present.js'
+import type { CardView } from './present.js'
 import { UploadGate, UploadRefusal, readApproved } from './upload.js'
 
 /** Cordis plugin name. Also the owner scope of the stored sign-in record. */
@@ -43,6 +48,65 @@ export const inject = ['commands', 'credentials', 'tools']
 
 /** The name of the file-upload tool, which the approval gate recognises. */
 const UPLOAD_TOOL = 'quberi_upload_file'
+
+/**
+ * What every tool returns: the plain text the model reads, plus the title and
+ * Markdown the conversation shows the person. Only `text` goes to the model.
+ */
+interface ToolCard extends CardView {
+  text: string
+}
+
+const toolOutput = {
+  schema: {
+    type: 'object' as const,
+    additionalProperties: false,
+    properties: {
+      text: { type: 'string' as const, required: true as const },
+      title: { type: 'string' as const, required: true as const },
+      markdown: { type: 'string' as const, required: true as const },
+    },
+  },
+  render: (_args: unknown, value: ToolCard) => [{ type: 'text' as const, text: value.text }],
+  presentationMeta: (_args: unknown, value: ToolCard) => ({ title: value.title, markdown: value.markdown }),
+}
+
+/** How a call and its result look in the conversation. Display only; the model's text is untouched. */
+function presenters(tool: string) {
+  return {
+    presentCall(args: unknown): ToolCallView | undefined {
+      const card = callCard(tool, args, detectLang())
+      if (card === undefined) return undefined
+      const path = tool === UPLOAD_TOOL ? (args as { path?: unknown } | null)?.path : undefined
+      return {
+        card: 'generic',
+        title: card.title,
+        kind: card.kind,
+        ...(typeof path === 'string' && path !== '' ? { locations: [{ path }] } : {}),
+      }
+    },
+    presentResult(_args: unknown, result: ToolResult): ToolResultView | undefined {
+      const meta = result.meta as { title?: unknown; markdown?: unknown } | undefined
+      if (result.isError || typeof meta?.title !== 'string' || typeof meta.markdown !== 'string') return undefined
+      return {
+        card: 'generic',
+        title: meta.title,
+        ...(meta.markdown === '' ? {} : { content: [{ type: 'text' as const, text: meta.markdown }] }),
+      }
+    },
+  }
+}
+
+/** Run a tool body, keeping network and parsing detail out of the model's context. */
+async function guarded<T>(signal: AbortSignal, body: () => Promise<T>): Promise<T> {
+  try {
+    return await body()
+  } catch (error) {
+    if (error instanceof QuberiUserError) throw error
+    if (signal.aborted) throw error
+    throw new Error('Quberi could not be reached or answered unexpectedly. Try again shortly.')
+  }
+}
 
 export interface Config {
   /** Quberi API origin. */
@@ -138,7 +202,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
 
   ctx.commands.register({
     name: 'quberi',
-    description: 'sign in to Quberi (search, save and upload knowledge) or check the connection',
+    description: 'sign in to Quberi (search, browse, save and upload knowledge) or check the connection',
     input: { hint: '[login|status|logout]' },
     handler: (invocation) => controller.command(invocation.rawInput),
   })
@@ -162,21 +226,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           description: 'How many passages to return, 1 to 10 (default 5).',
         },
       },
-      output: {
-        schema: { type: 'string' },
-        render: (_args, value) => [{ type: 'text', text: value }],
-      },
-      async execute(args, exec) {
-        try {
+      output: toolOutput,
+      ...presenters('quberi_search'),
+      execute: (args, exec) =>
+        guarded(exec.signal, async (): Promise<ToolCard> => {
           const result = await controller.search(args.query, args.top_k ?? 5, exec.signal)
-          return formatSearchResult(args.query, result)
-        } catch (error) {
-          if (error instanceof QuberiUserError) throw error
-          if (exec.signal.aborted) throw error
-          // Network and parsing details stay out of the model's context.
-          throw new Error('Quberi could not be reached or answered unexpectedly. Try again shortly.')
-        }
-      },
+          return { text: formatSearchResult(args.query, result), ...searchCard(args.query, result, detectLang()) }
+        }),
     }),
   )
 
@@ -211,23 +267,61 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             'Omit to use the user\'s personal space.',
         },
       },
-      output: {
-        schema: { type: 'string' },
-        render: (_args, value) => [{ type: 'text', text: value }],
+      output: toolOutput,
+      ...presenters('quberi_save'),
+      execute: (args, exec) =>
+        guarded(exec.signal, async (): Promise<ToolCard> => {
+          const result = await controller.saveNote({ title: args.title, text: args.text, space: args.space }, exec.signal)
+          return { text: formatSaveResult(result), ...saveCard(args.title, result, detectLang()) }
+        }),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'quberi_list_spaces',
+      description:
+        "List the Quberi spaces the user can read: their personal space and the team spaces, with how many documents " +
+        'each holds and whether the user can edit it (so whether saving or uploading there will work). ' +
+        'Read-only; it shows names and counts, not document contents. Use it to learn the exact space names ' +
+        'before listing documents, saving or uploading into a team space.',
+      parameters: {},
+      output: toolOutput,
+      ...presenters('quberi_list_spaces'),
+      execute: (_args, exec) =>
+        guarded(exec.signal, async (): Promise<ToolCard> => {
+          const result = await controller.listSpaces(exec.signal)
+          return { text: formatSpacesResult(result), ...spacesCard(result, detectLang()) }
+        }),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'quberi_list_documents',
+      description:
+        'List the documents in one Quberi space, newest first: name, type, size, last update and whether each is ' +
+        'searchable yet. Read-only; it shows file information only, never what is inside the files, so use ' +
+        'quberi_search to read content. It returns up to 50 documents; if more are available the result gives a ' +
+        'cursor to pass back for the next page. Use quberi_list_spaces first if you do not know the exact space name.',
+      parameters: {
+        space: {
+          type: 'string',
+          required: true,
+          description: 'Name of the space, exactly as quberi_list_spaces shows it.',
+        },
+        cursor: {
+          type: 'string',
+          description: "The cursor from the previous page's result, to get the next page. Omit for the first page.",
+        },
       },
-      async execute(args, exec) {
-        try {
-          const result = await controller.saveNote(
-            { title: args.title, text: args.text, space: args.space },
-            exec.signal,
-          )
-          return formatSaveResult(result)
-        } catch (error) {
-          if (error instanceof QuberiUserError) throw error
-          if (exec.signal.aborted) throw error
-          throw new Error('Quberi could not be reached or answered unexpectedly. Try again shortly.')
-        }
-      },
+      output: toolOutput,
+      ...presenters('quberi_list_documents'),
+      execute: (args, exec) =>
+        guarded(exec.signal, async (): Promise<ToolCard> => {
+          const result = await controller.listDocuments({ space: args.space, cursor: args.cursor }, exec.signal)
+          return { text: formatDocumentsResult(result), ...documentsCard(result, detectLang()) }
+        }),
     }),
   )
 
@@ -273,24 +367,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           description: "Name of the team space to upload into, as the user refers to it. Omit to use the user's personal space.",
         },
       },
-      output: {
-        schema: { type: 'string' },
-        render: (_args, value) => [{ type: 'text', text: value }],
-      },
-      async execute(args, exec) {
-        try {
-          // Refuses unless the approval question for this very call was asked.
-          const plan = gate.take(exec.callId)
-          const data = await readApproved(plan)
-          const result = await controller.uploadFile({ data, filename: plan.filename, space: plan.space }, exec.signal)
-          return formatUploadResult(result)
-        } catch (error) {
-          if (error instanceof QuberiUserError) throw error
-          if (error instanceof UploadRefusal) throw new QuberiUserError(error.message)
-          if (exec.signal.aborted) throw error
-          throw new Error('Quberi could not be reached or answered unexpectedly. Try again shortly.')
-        }
-      },
+      output: toolOutput,
+      ...presenters(UPLOAD_TOOL),
+      execute: (_args, exec) =>
+        guarded(exec.signal, async (): Promise<ToolCard> => {
+          try {
+            // Refuses unless the approval question for this very call was asked.
+            const plan = gate.take(exec.callId)
+            const data = await readApproved(plan)
+            const result = await controller.uploadFile({ data, filename: plan.filename, space: plan.space }, exec.signal)
+            return { text: formatUploadResult(result), ...uploadCard(result, detectLang()) }
+          } catch (error) {
+            if (error instanceof UploadRefusal) throw new QuberiUserError(error.message)
+            throw error
+          }
+        }),
     }),
   )
 }

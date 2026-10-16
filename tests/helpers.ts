@@ -34,6 +34,8 @@ export interface FakeQuberi {
   searchAnswer?: (auth: string) => { status: number; body: unknown }
   saveAnswer?: (auth: string, body: string) => { status: number; body: unknown }
   uploadAnswer?: (auth: string, form: FormData) => { status: number; body: unknown }
+  spacesAnswer?: (auth: string) => { status: number; body: unknown }
+  documentsAnswer?: (auth: string, query: URLSearchParams) => { status: number; body: unknown }
   /** The multipart bodies the fake received, in order. */
   uploads: FormData[]
   /** Scope stamped on tokens the fake issues; default read + write. */
@@ -125,6 +127,37 @@ export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = 
           space_id: 'sp-1',
           space_name: 'My space',
           name: 'Note.md',
+        })
+      }
+      if (url.includes('/api/v1/external/spaces')) {
+        const auth = headers.Authorization ?? ''
+        if (fake.spacesAnswer) {
+          const answer = fake.spacesAnswer(auth)
+          return json(answer.status, answer.body)
+        }
+        return json(200, {
+          organization: 'Acme',
+          total: 2,
+          spaces: [
+            { name: "chaney's space", kind: 'personal', can_edit: true, document_count: 3 },
+            { name: 'Product Team', kind: 'shared', can_edit: false, document_count: 12 },
+          ],
+        })
+      }
+      if (url.includes('/api/v1/external/documents')) {
+        const auth = headers.Authorization ?? ''
+        const query = new URL(url).searchParams
+        if (fake.documentsAnswer) {
+          const answer = fake.documentsAnswer(auth, query)
+          return json(answer.status, answer.body)
+        }
+        return json(200, {
+          space_name: query.get('space') ?? '',
+          total: 1,
+          next_cursor: null,
+          documents: [
+            { name: 'AI RMF.pdf', mime_type: 'application/pdf', size_bytes: 1946127, updated_at: '2026-10-16T10:10:00Z', status: 'ready' },
+          ],
         })
       }
       if (url.endsWith('/api/v1/external/upload')) {

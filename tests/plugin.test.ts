@@ -67,7 +67,13 @@ describe('plugin wiring', () => {
     const { ctx, registered, effects } = fakeContext()
     await apply(ctx, config)
     expect(registered.commands.map((c) => c.name)).toEqual(['quberi'])
-    expect(registered.tools.map((t) => t.name)).toEqual(['quberi_search', 'quberi_save', 'quberi_upload_file'])
+    expect(registered.tools.map((t) => t.name)).toEqual([
+      'quberi_search',
+      'quberi_save',
+      'quberi_list_spaces',
+      'quberi_list_documents',
+      'quberi_upload_file',
+    ])
     expect(effects).toHaveLength(1)
 
     const search = registered.tools.find((t) => t.name === 'quberi_search')!
@@ -83,6 +89,12 @@ describe('plugin wiring', () => {
     // Upload takes a path and an optional space; nothing that could carry file content or a URL.
     expect(Object.keys(upload.parameters.properties).sort()).toEqual(['path', 'space'])
     expect(upload.parameters.required).toEqual(['path'])
+    // Browsing takes no free text that could carry content: a space name and a page cursor.
+    const spaces = registered.tools.find((t) => t.name === 'quberi_list_spaces')!
+    expect(Object.keys(spaces.parameters.properties ?? {})).toEqual([])
+    const documents = registered.tools.find((t) => t.name === 'quberi_list_documents')!
+    expect(Object.keys(documents.parameters.properties).sort()).toEqual(['cursor', 'space'])
+    expect(documents.parameters.required).toEqual(['space'])
   })
 
   it('refuses a non-https server address up front', async () => {
@@ -234,8 +246,10 @@ describe('file upload: the approval gate', () => {
     const { listener, upload, records } = await mounted(dir)
     records.set('quberi/oauth', { kind: 'grant', payload: tokens({ scope: 'knowledge:read knowledge:write knowledge:upload' }) })
     expect((await listener(call(), allow)).kind).toBe('ask')
-    const text = await upload.execute({ path: 'spec.pdf' }, exec())
-    expect(text).toMatch(/Uploaded to .* as "spec\.pdf"/u)
+    const done = await upload.execute({ path: 'spec.pdf' }, exec())
+    expect(done.text).toMatch(/Uploaded to .* as "spec\.pdf"/u)
+    expect(done.title).toMatch(/已上传|Uploaded/u)
+    expect(done.markdown).toContain('spec')
     expect(fake.uploads).toHaveLength(1)
     expect((fake.uploads[0].get('file') as File).name).toBe('spec.pdf')
     await expect(upload.execute({ path: 'spec.pdf' }, exec())).rejects.toThrow(/not approved/u)
@@ -282,8 +296,122 @@ describe('file upload: the approval gate', () => {
 
   it('with uploads turned off, registers no upload tool and no gate, and does not ask for the permission', async () => {
     const { registered, listener } = await mounted(workspace(), { uploadFiles: false })
-    expect(registered.tools.map((t) => t.name)).toEqual(['quberi_search', 'quberi_save'])
+    expect(registered.tools.map((t) => t.name)).toEqual([
+      'quberi_search',
+      'quberi_save',
+      'quberi_list_spaces',
+      'quberi_list_documents',
+    ])
     expect(listener).toBeUndefined()
     expect(config.uploadFiles).toBe(true)
+  })
+})
+
+describe('how the tools look in the conversation', () => {
+  const signedIn = (records: Map<string, Record_>) =>
+    records.set('quberi/oauth', {
+      kind: 'grant',
+      payload: tokens({ scope: 'knowledge:read knowledge:write knowledge:upload' }),
+    })
+  const exec = () => ({ callId: 'c1', signal: new AbortController().signal })
+
+  async function mountedWithFake(over: (fake: ReturnType<typeof fakeQuberi>) => void = () => undefined) {
+    const fake = fakeQuberi()
+    over(fake)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(fake.fetch)
+    const harness = fakeContext('/nonexistent')
+    await apply(harness.ctx, { ...config, openBrowser: false, focusApp: false })
+    signedIn(harness.records)
+    const tool = (name: string) => harness.registered.tools.find((t) => t.name === name)!
+    return { ...harness, fake, tool, restore: () => fetchSpy.mockRestore() }
+  }
+
+  it('every tool shows a title while it runs, and the upload also points at its file', async () => {
+    const { tool, restore } = await mountedWithFake()
+    const call = (name: string, args: unknown) => tool(name).presentCall(args)
+    expect(call('quberi_search', { query: 'AI RMF' })).toMatchObject({ card: 'generic', kind: 'search' })
+    expect(call('quberi_save', { title: 'T', text: 'b' })).toMatchObject({ card: 'generic', kind: 'other' })
+    expect(call('quberi_list_spaces', {})).toMatchObject({ card: 'generic', kind: 'search' })
+    expect(call('quberi_list_documents', { space: 'Std' })).toMatchObject({ card: 'generic', kind: 'search' })
+    const upload = call('quberi_upload_file', { path: 'docs/a.pdf', space: 'Ops' })
+    expect(upload).toMatchObject({ card: 'generic', kind: 'other', locations: [{ path: 'docs/a.pdf' }] })
+    expect(upload.title).toContain('docs/a.pdf')
+    // Arguments that do not fit the tool fall back to Harness' default card instead of throwing.
+    expect(() => call('quberi_upload_file', null)).not.toThrow()
+    expect(call('quberi_upload_file', { path: 5 })?.locations).toBeUndefined()
+    restore()
+  })
+
+  it('lists spaces: the model gets plain text, the person gets a card', async () => {
+    const { tool, restore } = await mountedWithFake()
+    const out = await tool('quberi_list_spaces').execute({}, exec())
+    expect(out.text).toContain('"Product Team" (shared space, read only, 12 documents)')
+    expect(out.markdown).toContain('Product Team')
+    expect(out.title).toMatch(/List spaces|查看空间列表/u)
+    // What the model reads is only the text; the card never reaches it.
+    const blocks = tool('quberi_list_spaces').output.render({}, out)
+    expect(blocks).toEqual([{ type: 'text', text: out.text }])
+    expect(JSON.stringify(blocks)).not.toContain('📁')
+    restore()
+  })
+
+  it('lists documents for a named space and hands the next-page cursor to the model', async () => {
+    const { tool, fake, restore } = await mountedWithFake((f) => {
+      f.documentsAnswer = (_auth, query) => ({
+        status: 200,
+        body: {
+          space_name: query.get('space'),
+          total: 80,
+          next_cursor: 'page-2',
+          documents: [{ name: 'A.pdf', mime_type: 'application/pdf', size_bytes: 5, updated_at: '2026-10-16T10:10:00Z', status: 'ready' }],
+        },
+      })
+    })
+    const out = await tool('quberi_list_documents').execute({ space: 'Std', cursor: 'page-1' }, exec())
+    expect(out.text).toContain('cursor "page-2"')
+    expect(out.markdown).not.toContain('page-2')
+    const seen = fake.calls.find((c) => c.url.includes('/external/documents'))!
+    expect(new URL(seen.url).searchParams.get('cursor')).toBe('page-1')
+    restore()
+  })
+
+  it('hands the screen only a title and Markdown, and nothing for a failed call', async () => {
+    const { tool, restore } = await mountedWithFake()
+    const search = tool('quberi_search')
+    const out = await search.execute({ query: 'remote work' }, exec())
+    const meta = search.output.presentationMeta({ query: 'remote work' }, out)
+    expect(Object.keys(meta).sort()).toEqual(['markdown', 'title'])
+    const view = search.presentResult({ query: 'remote work' }, { content: [], isError: false, meta })
+    expect(view).toMatchObject({ card: 'generic', title: expect.stringContaining('remote work') })
+    expect(view.content[0]).toMatchObject({ type: 'text' })
+    expect(view.content[0].text).toContain('Handbook')
+    // Failed call, or a result with no card data (replayed from an older session): keep the default.
+    const args = { query: 'remote work' }
+    expect(search.presentResult(args, { content: [], isError: true, meta })).toBeUndefined()
+    expect(search.presentResult(args, { content: [], isError: false })).toBeUndefined()
+    expect(search.presentResult(args, { content: [], isError: false, meta: { title: 5 } })).toBeUndefined()
+    restore()
+  })
+
+  it('an empty card body is left out rather than shown blank', async () => {
+    const { tool, restore } = await mountedWithFake((f) => {
+      f.searchAnswer = () => ({ status: 200, body: { organization: 'A', searched_spaces: 1, passages: [] } })
+    })
+    const search = tool('quberi_search')
+    const out = await search.execute({ query: 'x' }, exec())
+    const meta = search.output.presentationMeta({ query: 'x' }, out)
+    const view = search.presentResult({ query: 'x' }, { content: [], isError: false, meta })
+    expect(view).toMatchObject({ card: 'generic' })
+    expect(view).not.toHaveProperty('content')
+    expect(out.text).toMatch(/found no passages/u)
+    restore()
+  })
+
+  it('save reports where the note went, in the model text and on the card', async () => {
+    const { tool, restore } = await mountedWithFake()
+    const out = await tool('quberi_save').execute({ title: 'Conclusion', text: 'We ship B.' }, exec())
+    expect(out.text).toMatch(/Saved to/u)
+    expect(out.title).toMatch(/已保存到|Saved to/u)
+    restore()
   })
 })

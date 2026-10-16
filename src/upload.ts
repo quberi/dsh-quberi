@@ -123,7 +123,7 @@ function cleanSpace(space: unknown): string | undefined {
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${Number((bytes / (1024 * 1024)).toFixed(2))} MB`
 }
 
 /** Read the file through one handle, refusing links, and report its size, hash and identity. */
@@ -155,7 +155,9 @@ async function fingerprint(realPath: string): Promise<{ data: Buffer; size: numb
 }
 
 function tooLarge(size: number): string {
-  return `That file is ${formatBytes(size)}; the limit is ${formatBytes(MAX_UPLOAD_BYTES)}.`
+  // A file a byte over the limit would otherwise read "25 MB; the limit is 25 MB".
+  const shown = formatBytes(size) === formatBytes(MAX_UPLOAD_BYTES) ? `${size.toLocaleString('en-US')} bytes` : formatBytes(size)
+  return `That file is ${shown}; the limit is ${formatBytes(MAX_UPLOAD_BYTES)}.`
 }
 
 /**
@@ -306,13 +308,15 @@ export class UploadGate {
 
     const where = plan.space ? `the "${plan.space}" space` : 'your personal space'
     const whereZh = plan.space ? `空间“${plan.space}”` : '个人空间'
-    const detail = `${plan.displayPath} (${formatBytes(plan.size)}, sha256 ${plan.sha256.slice(0, 12)})`
+    // The audited reason carries the hash; the prompt a person reads does not (it means nothing to them).
+    const shown = `${plan.displayPath} (${formatBytes(plan.size)})`
+    const tail = 'Anyone with access to that space can then find and read it.'
     return {
       kind: 'ask',
-      reason: `Upload ${detail} to Quberi, into ${where}. Anyone with access to that space can then find and read it.`,
+      reason: `Upload ${shown}, sha256 ${plan.sha256.slice(0, 12)}, to Quberi, into ${where}. ${tail}`,
       displayReason: {
-        en: `Upload ${detail} to Quberi, into ${where}. Anyone with access to that space can then find and read it.`,
-        zh: `把 ${detail} 上传到 Quberi 的${whereZh}。有该空间权限的人都能搜到并读取它。`,
+        en: `Upload ${shown} to Quberi, into ${where}. ${tail}`,
+        zh: `把 ${shown} 上传到 Quberi 的${whereZh}。有该空间权限的人都能搜到并读取它。`,
       },
     }
   }
