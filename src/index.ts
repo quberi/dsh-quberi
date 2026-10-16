@@ -1,10 +1,12 @@
 /**
- * Search and save to your Quberi knowledge base from DeepSeek Harness.
+ * Search, save and upload to your Quberi knowledge base from DeepSeek Harness.
  *
  * `/quberi login` signs you in through the browser (OAuth + PKCE); after that
- * the model can call `quberi_search` (read) and `quberi_save` (write). The
- * sign-in acts as you: search finds only passages in spaces you can read, and
- * save only writes into spaces you can edit, in the one organization you chose.
+ * the model can call `quberi_search` (read), `quberi_save` (write) and
+ * `quberi_upload_file` (upload, one workspace file at a time, each approved by
+ * you first). The sign-in acts as you: search finds only passages in spaces you
+ * can read, and save and upload only write into spaces you can edit, in the one
+ * organization you chose.
  * You can disconnect it from Quberi (Account) or with `/quberi logout`.
  *
  * @module dsh-quberi
@@ -23,15 +25,24 @@ import {
   QuberiUserError,
   formatSaveResult,
   formatSearchResult,
+  formatUploadResult,
 } from './controller.js'
 import type { TokenStore } from './controller.js'
 import { readTokenSet } from './oauth.js'
 import type { TokenSet } from './oauth.js'
+import { UploadGate, UploadRefusal, readApproved } from './upload.js'
 
 /** Cordis plugin name. Also the owner scope of the stored sign-in record. */
 export const name = 'quberi'
-/** Services this plugin needs. */
+/**
+ * Services this plugin needs. Cordis loads a plugin only while every one is
+ * present, so the workspace services behind file upload are not listed here:
+ * they are looked up at call time, and without them the upload tool refuses.
+ */
 export const inject = ['commands', 'credentials', 'tools']
+
+/** The name of the file-upload tool, which the approval gate recognises. */
+const UPLOAD_TOOL = 'quberi_upload_file'
 
 export interface Config {
   /** Quberi API origin. */
@@ -52,6 +63,11 @@ export interface Config {
   autoLogin: boolean
   /** Bring Harness back to the front when sign-in finishes (macOS). */
   focusApp: boolean
+  /**
+   * Offer the file-upload tool (each file is shown to you and needs your approval).
+   * Off: the tool is not registered and sign-in does not ask for the upload permission.
+   */
+  uploadFiles: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -64,7 +80,27 @@ export const Config: z<Config> = z.object({
   openBrowser: z.boolean().default(true),
   autoLogin: z.boolean().default(true),
   focusApp: z.boolean().default(true),
+  uploadFiles: z.boolean().default(true),
 })
+
+/** The folder the calling agent's session works in, or undefined if it cannot be told. */
+function workspaceRootOf(ctx: Context, call: { agent?: unknown }): string | undefined {
+  // Looked up by name at call time (as the tools service does for approval), not injected.
+  const lookup = (ctx as unknown as { get(name: string): unknown }).get.bind(ctx)
+  const agent = call.agent as { session?: unknown; id?: unknown } | undefined
+  if (agent === undefined) return undefined
+  try {
+    // An agent carries its session; the store is the fallback (an agent's id is its session id).
+    const sessions = lookup('sessions') as { get(id: unknown): unknown } | undefined
+    const session = agent.session ?? (agent.id === undefined ? undefined : sessions?.get(agent.id))
+    const policy = lookup('sandboxPolicy') as { resolve(request: { session: unknown }): { workspaceRoot: string } } | undefined
+    if (session === undefined || policy === undefined) return undefined
+    const root = policy.resolve({ session }).workspaceRoot
+    return typeof root === 'string' && root !== '' ? root : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** Keep the token set as one credential record, written under the host's lock. */
 function recordStore(ctx: Context): TokenStore {
@@ -87,7 +123,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const controller = new QuberiController({
     baseUrl: config.baseUrl,
     clientId: config.clientId,
-    scope: 'knowledge:read knowledge:write',
+    scope: config.uploadFiles ? 'knowledge:read knowledge:write knowledge:upload' : 'knowledge:read knowledge:write',
     callbackPort: config.callbackPort,
     loginTimeoutMs: config.loginTimeoutMs,
     requestTimeoutMs: config.requestTimeoutMs,
@@ -102,7 +138,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
 
   ctx.commands.register({
     name: 'quberi',
-    description: 'sign in to Quberi (search and save knowledge) or check the connection',
+    description: 'sign in to Quberi (search, save and upload knowledge) or check the connection',
     input: { hint: '[login|status|logout]' },
     handler: (invocation) => controller.command(invocation.rawInput),
   })
@@ -188,6 +224,67 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           return formatSaveResult(result)
         } catch (error) {
           if (error instanceof QuberiUserError) throw error
+          if (exec.signal.aborted) throw error
+          throw new Error('Quberi could not be reached or answered unexpectedly. Try again shortly.')
+        }
+      },
+    }),
+  )
+
+  if (!config.uploadFiles) return
+
+  // Every upload is shown to the person first. The gate records what it showed;
+  // the tool sends only that file, and only if the question was actually asked.
+  const gate = new UploadGate({
+    workspaceRoot: (call) => workspaceRootOf(ctx, call),
+    blocker: () => controller.uploadBlocker(),
+  })
+
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    if (exec.name !== UPLOAD_TOOL) return next()
+    const prior = await next()
+    // Another policy saying no (or cancel) stands; ours only adds the question.
+    if (prior.kind === 'deny' || prior.kind === 'cancel') return prior
+    return gate.decide({ callId: exec.callId, arguments: exec.arguments, agent: exec.agent })
+  })
+
+  ctx.tools.register(
+    defineTool({
+      name: UPLOAD_TOOL,
+      description:
+        "Upload one file from the current workspace into the user's Quberi knowledge base, so it can be found " +
+        'later with quberi_search (PDF, Word, Excel, PowerPoint, Markdown, CSV, text and JSON are indexed for search; ' +
+        'images are stored but not yet searchable by content). ' +
+        'Only use it when the user asked you to upload or keep that specific file. ' +
+        'The user is shown the exact file, its size and the destination space and must approve every upload, ' +
+        'so say which file you are about to upload. ' +
+        'Only files inside the workspace work; archives, HTML, SVG, executables and files that look like secrets are refused. ' +
+        'By default it goes into the user\'s personal space; pass `space` to use a named team space they can edit.',
+      parameters: {
+        path: {
+          type: 'string',
+          required: true,
+          description: 'Path of the file, relative to the workspace folder (or absolute but inside it).',
+        },
+        space: {
+          type: 'string',
+          description: "Name of the team space to upload into, as the user refers to it. Omit to use the user's personal space.",
+        },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: value }],
+      },
+      async execute(args, exec) {
+        try {
+          // Refuses unless the approval question for this very call was asked.
+          const plan = gate.take(exec.callId)
+          const data = await readApproved(plan)
+          const result = await controller.uploadFile({ data, filename: plan.filename, space: plan.space }, exec.signal)
+          return formatUploadResult(result)
+        } catch (error) {
+          if (error instanceof QuberiUserError) throw error
+          if (error instanceof UploadRefusal) throw new QuberiUserError(error.message)
           if (exec.signal.aborted) throw error
           throw new Error('Quberi could not be reached or answered unexpectedly. Try again shortly.')
         }

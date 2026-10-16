@@ -1,14 +1,16 @@
 # dsh-quberi
 
-Search and save to your [Quberi](https://ai.quberi.com) knowledge base from
-DeepSeek Harness.
+Search, save notes and upload files to your [Quberi](https://ai.quberi.com)
+knowledge base from DeepSeek Harness.
 
 Ask Harness a question about your documents. The first time, your browser
 opens by itself so you can approve access; after that the model can call
 `quberi_search`, which finds passages in the documents **you** can read in
 Quberi, in the one organization you pick. It can also call `quberi_save` to add
-a note (a conclusion, decision or summary from the chat) to your knowledge base.
-Saving is new in 0.3.0 and needs a fresh approval that includes **save**.
+a note (a conclusion, decision or summary from the chat) to your knowledge base,
+and `quberi_upload_file` to add a file from your workspace. Saving is new in
+0.3.0 and uploading in 0.4.0; each needs a fresh sign-in that includes it. An
+upload only happens after **you approve that file** (see Uploading files).
 
 ## Install
 
@@ -32,8 +34,9 @@ Quberi server (see Configuration).
 
 A plugin runs on your machine with your permissions, so read the source first.
 It is small: `src/oauth.ts` (sign-in helpers), `src/browser.ts` (opens your
-browser), `src/controller.ts` (sign-in, token refresh, search, save) and
-`src/index.ts` (the `/quberi` command and the tool). Its only runtime
+browser), `src/controller.ts` (sign-in, token refresh, search, save, upload),
+`src/upload.ts` (which files may be uploaded, and the approval gate) and
+`src/index.ts` (the `/quberi` command and the tools). Its only runtime
 dependency is `@deepseek-ai/schemastery`.
 
 ### From source
@@ -49,7 +52,7 @@ dsh plugin --profile desktop add /path/to/dsh-quberi-<version>.tgz
 
 | Command | What it does |
 |---|---|
-| `/quberi login` | Opens your browser to sign in to Quberi (the link is also shown in case it does not open). Choose an organization and allow. You rarely need this: the first search does it for you. If you signed in with an older version (read only), run it again to allow saving. |
+| `/quberi login` | Opens your browser to sign in to Quberi (the link is also shown in case it does not open). Choose an organization and allow. You rarely need this: the first search does it for you. If you signed in with an older version, run it again to allow saving or uploading. |
 | `/quberi status` | Shows whether you are connected. Never prints a token. |
 | `/quberi logout` | Revokes the sign-in at Quberi and forgets it locally. |
 
@@ -86,15 +89,52 @@ A saved note becomes a document in that space. **Anyone who can read that space
 can find it**, so name a shared space only on purpose. Saving is recorded in
 the audit log (the tool's name and the new document, not the text).
 
+## Uploading files
+
+`quberi_upload_file` sends one file from your current workspace to your personal
+space, or to a named space you can edit. It exists so Harness can keep a PDF,
+a Word or Excel file, a slide deck, an image or a text file you point to,
+without you opening the Quberi web app.
+
+Because a model chooses the path, and a model can be steered by whatever text it
+read last, three separate checks stand between a path and the network:
+
+1. **You approve every file.** Harness shows the exact file, its size, a short
+   hash and the destination space, and the upload runs only if you allow it. The
+   approval covers that one file once; there is no "always allow". With no
+   approval prompt available (a headless run), or in the "full access, never ask"
+   mode, the upload is refused rather than sent.
+2. **Workspace only.** The path must stay inside the workspace folder after links
+   are resolved. Folders such as `.git`, `.ssh` and `.aws`, and names that look
+   like secrets (`.env*`, `secrets.json`, `credentials.txt`, `id_rsa*`), are
+   refused outright. This filter is best effort, not a guarantee, which is why
+   step 1 exists.
+3. **The approved file is the file sent.** The file is read again when it is
+   sent and must match what you approved; if it changed, nothing is uploaded.
+
+Quberi then checks the file's actual content (not its name or label) and has the
+final word: png, jpeg, gif, webp, pdf, docx, xlsx, pptx, md, csv, txt and json
+are accepted, up to 25 MB. Archives, HTML, SVG, executables and legacy `.doc` /
+`.xls` are refused. PDF, Office, Markdown, CSV, text and JSON files are indexed
+for search shortly after upload; images are stored but are not yet searchable by
+their content.
+
+Anyone who can read the destination space can find the file. Uploading is a
+separate permission (`knowledge:upload`), recorded in the audit log as the
+document and its size and type, never the contents. To turn the tool off, and
+stop asking for the permission at sign-in, set `uploadFiles: false` (see
+Configuration).
+
 ## What it can and cannot do
 
 - It acts as you: search only reads spaces you can read, and save only writes
   into spaces you can edit. Both are re-checked on every call. If your access
   changes, the next call reflects it.
-- It can add notes, nothing else. It cannot edit or delete anything that is
-  already there, and it cannot upload files.
-- Saving is a separate permission (`knowledge:write`). A sign-in made by an
-  earlier version only allows search; it is not upgraded behind your back.
+- It can add notes and files, nothing else. It cannot edit or delete anything
+  that is already there.
+- Saving (`knowledge:write`) and uploading (`knowledge:upload`) are separate
+  permissions. A sign-in made by an earlier version does not have them and is
+  not upgraded behind your back; run `/quberi login` to add them.
 - Access tokens last one hour and refresh on their own; a sign-in lasts at most
   90 days. A refresh token that is used twice is treated as stolen and the whole
   sign-in is revoked.
@@ -106,7 +146,8 @@ the audit log (the tool's name and the new document, not the text).
 Defaults are right for the hosted service. For a self-hosted Quberi, point
 `baseUrl` at your API (https, or `http://127.0.0.1:<port>` for development).
 `openBrowser`, `autoLogin` and `focusApp` (all on by default) switch off the
-automatic browser, sign-in on first use, and returning to Harness:
+automatic browser, sign-in on first use, and returning to Harness. `uploadFiles`
+(on by default) offers the upload tool; off removes it:
 
 ```yaml
 - insert:
@@ -117,6 +158,7 @@ automatic browser, sign-in on first use, and returning to Harness:
         # openBrowser: false
         # autoLogin: false
         # focusApp: false
+        # uploadFiles: false
 ```
 
 ## Compatibility

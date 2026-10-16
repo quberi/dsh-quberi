@@ -47,7 +47,11 @@ const SAVE_PATH = '/api/v1/external/save'
 const MAX_QUERY_CHARS = 2000
 const MAX_NOTE_TITLE_CHARS = 200
 const MAX_NOTE_TEXT_CHARS = 100_000
+const UPLOAD_PATH = '/api/v1/external/upload'
 const WRITE_SCOPE = 'knowledge:write'
+const UPLOAD_SCOPE = 'knowledge:upload'
+/** A 25 MiB upload over a slow link needs longer than a search does. */
+const UPLOAD_MIN_TIMEOUT_MS = 180_000
 
 /** Where the host keeps the token set. Writes are serialized (and cross-process where possible). */
 export interface TokenStore {
@@ -111,6 +115,23 @@ export interface SaveResult {
   space_id: string
   space_name: string
   name: string
+}
+
+export interface UploadResult {
+  document_id: string
+  space_id: string
+  space_name: string
+  name: string
+  mime_type: string
+  size_bytes: number
+}
+
+export interface UploadArgs {
+  /** The file's bytes, already checked and approved by the caller. */
+  data: Uint8Array
+  filename: string
+  /** Target space, named the way the person does. Omit for the personal space. */
+  space?: string
 }
 
 export interface SaveArgs {
@@ -213,7 +234,12 @@ export class QuberiController {
     if (tokens === undefined) return 'Not connected to Quberi. Run /quberi login.'
     const expires = new Date(tokens.expiresAt).toISOString()
     const canSave = hasScope(tokens.scope, WRITE_SCOPE)
-    const what = canSave ? 'search and save' : 'read-only search (run /quberi login to add saving)'
+    const canUpload = hasScope(tokens.scope, UPLOAD_SCOPE)
+    const what = canSave
+      ? canUpload
+        ? 'search, save and upload files'
+        : 'search and save (run /quberi login to add file upload)'
+      : 'read-only search (run /quberi login to add saving)'
     return `Connected to Quberi (${what}). The access token is refreshed automatically; current one expires ${expires}.`
   }
 
@@ -609,16 +635,13 @@ export class QuberiController {
         name: typeof body.name === 'string' ? body.name : '',
       }
     }
-    let code = ''
-    try {
-      const detail = (parseJsonObject(raw, 'Quberi error') as { detail?: unknown }).detail
-      if (typeof detail === 'object' && detail !== null) code = String((detail as { code?: unknown }).code ?? '')
-    } catch {
-      /* not JSON: fall through to the generic message */
-    }
+    const { code, spaces } = parseErrorDetail(raw)
     if (response.status === 401) {
       await this.options.store.clear()
       throw new QuberiUserError('Quberi no longer accepts this sign-in. Run /quberi login.')
+    }
+    if (response.status === 409 && code === 'space_required') {
+      throw new QuberiUserError(spaceRequiredMessage('saved', 'save into', spaces))
     }
     if (response.status === 403 && code === 'insufficient_scope') {
       throw new QuberiUserError(
@@ -641,6 +664,104 @@ export class QuberiController {
       throw new QuberiUserError('Quberi is rate limiting saves from this sign-in. Wait a minute and try again.')
     }
     throw new QuberiUserError(`Quberi could not save the note (HTTP ${response.status}).`)
+  }
+
+  // -------------------------------------------------------------------------
+  // Upload a file
+  // -------------------------------------------------------------------------
+
+  /**
+   * Why an upload cannot work with the current sign-in, or undefined when it can
+   * (or when there is no sign-in yet: that is handled at send time). Asked before
+   * the person is prompted, so they are never asked to approve something that
+   * cannot be sent.
+   */
+  async uploadBlocker(): Promise<string | undefined> {
+    const tokens = await this.options.store.read()
+    if (tokens === undefined || hasScope(tokens.scope, UPLOAD_SCOPE)) return undefined
+    return 'This Quberi sign-in cannot upload files. Ask the user to run /quberi login to grant file upload, then try again.'
+  }
+
+  /** Send one file the caller has already checked and had approved. */
+  async uploadFile(args: UploadArgs, signal?: AbortSignal): Promise<UploadResult> {
+    await this.connectIfNeeded(signal)
+    let tokens = await this.freshTokens()
+    if (!hasScope(tokens.scope, UPLOAD_SCOPE)) {
+      throw new QuberiUserError(
+        'This Quberi sign-in cannot upload files. Ask the user to run /quberi login to grant file upload, then try again.',
+      )
+    }
+
+    const form = new FormData()
+    form.append('file', new Blob([args.data as Uint8Array<ArrayBuffer>]), args.filename)
+    const space = args.space?.trim()
+    if (space) form.append('space', space)
+    const timeoutMs = Math.max(this.options.requestTimeoutMs, UPLOAD_MIN_TIMEOUT_MS)
+
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await this.request(
+        `${this.baseUrl}${UPLOAD_PATH}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${tokens.accessToken}` }, body: form },
+        signal,
+        timeoutMs,
+      )
+      if (response.status === 401 && attempt === 0) {
+        tokens = await this.freshTokens(tokens.accessToken)
+        continue
+      }
+      return this.readUploadResponse(response)
+    }
+  }
+
+  private async readUploadResponse(response: Awaited<ReturnType<typeof fetch>>): Promise<UploadResult> {
+    const raw = await response.text()
+    if (response.ok) {
+      const body = parseJsonObject(raw, 'Quberi upload response')
+      return {
+        document_id: typeof body.document_id === 'string' ? body.document_id : '',
+        space_id: typeof body.space_id === 'string' ? body.space_id : '',
+        space_name: typeof body.space_name === 'string' ? body.space_name : '',
+        name: typeof body.name === 'string' ? body.name : '',
+        mime_type: typeof body.mime_type === 'string' ? body.mime_type : '',
+        size_bytes: typeof body.size_bytes === 'number' ? body.size_bytes : 0,
+      }
+    }
+    const { code, spaces } = parseErrorDetail(raw)
+    const { status } = response
+    if (status === 401) {
+      await this.options.store.clear()
+      throw new QuberiUserError('Quberi no longer accepts this sign-in. Run /quberi login.')
+    }
+    if (status === 403 && code === 'insufficient_scope') {
+      throw new QuberiUserError('This Quberi sign-in cannot upload files. Run /quberi login to grant file upload, then try again.')
+    }
+    if (status === 403 && code === 'external_tools_disabled') {
+      throw new QuberiUserError('Your Quberi organization has turned off outside tools. Ask an owner or admin to turn them on.')
+    }
+    if (status === 403) {
+      throw new QuberiUserError('You can read that space but not add files to it. Choose a space you can edit, or ask for access.')
+    }
+    if (status === 404 && code === 'space_not_found') {
+      throw new QuberiUserError('No space by that name that you can upload into. Check the name, or leave it out to use your personal space.')
+    }
+    if (status === 409 && code === 'space_required') {
+      throw new QuberiUserError(spaceRequiredMessage('uploaded', 'upload into', spaces))
+    }
+    if (status === 413) {
+      throw new QuberiUserError('Quberi refused the file because it is too large (the limit is 25 MB).')
+    }
+    if (status === 415) {
+      throw new QuberiUserError(
+        'Quberi does not accept that kind of file from outside tools (allowed: png, jpg, gif, webp, pdf, docx, xlsx, pptx, md, csv, txt, json).',
+      )
+    }
+    if (status === 400) {
+      throw new QuberiUserError('Quberi checked the file and it is not what its name says (or is not valid), so it was not stored.')
+    }
+    if (status === 429) {
+      throw new QuberiUserError('Quberi is rate limiting uploads from this sign-in. Wait a minute and try again.')
+    }
+    throw new QuberiUserError(`Quberi could not store the file (HTTP ${status}).`)
   }
 
   /**
@@ -727,11 +848,40 @@ export class QuberiController {
     return run
   }
 
-  private request(input: string, init?: RequestInit, signal?: AbortSignal): Promise<Response> {
-    const signals = [this.lifetime.signal, AbortSignal.timeout(this.options.requestTimeoutMs)]
+  private request(input: string, init?: RequestInit, signal?: AbortSignal, timeoutMs?: number): Promise<Response> {
+    const signals = [this.lifetime.signal, AbortSignal.timeout(timeoutMs ?? this.options.requestTimeoutMs)]
     if (signal !== undefined) signals.push(signal)
     return this.fetchImpl(input, { ...init, signal: AbortSignal.any(signals) })
   }
+}
+
+/** The error code, and any space names, from a Quberi error body. Anything else in it is ignored. */
+function parseErrorDetail(raw: string): { code: string; spaces: string[] } {
+  let code = ''
+  let spaces: string[] = []
+  try {
+    const detail = (parseJsonObject(raw, 'Quberi error') as { detail?: unknown }).detail
+    if (typeof detail === 'object' && detail !== null) {
+      code = String((detail as { code?: unknown }).code ?? '')
+      const named = (detail as { spaces?: unknown }).spaces
+      if (Array.isArray(named)) {
+        // Names come from the server and end up in the model's context: keep a few short strings only.
+        spaces = named
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.replace(/\s+/g, ' ').trim().slice(0, 60))
+          .filter((item) => item.length > 0)
+          .slice(0, 10)
+      }
+    }
+  } catch {
+    /* not JSON: the caller falls back to a generic message */
+  }
+  return { code, spaces }
+}
+
+function spaceRequiredMessage(done: string, action: string, spaces: string[]): string {
+  const choices = spaces.length > 0 ? ` Spaces you can use: ${spaces.join(', ')}.` : ''
+  return `Nothing was ${done}: you have no personal space to default to. Ask the person which space to ${action}, then try again with that space name.${choices}`
 }
 
 /** Whether a space-separated scope string grants a given scope. */
@@ -742,6 +892,16 @@ export function hasScope(scope: string, wanted: string): boolean {
 // ---------------------------------------------------------------------------
 // Turning a result into text for the model
 // ---------------------------------------------------------------------------
+
+/** A short confirmation of an uploaded file, naming where it landed. */
+export function formatUploadResult(result: UploadResult): string {
+  const where = result.space_name ? `the "${result.space_name}" space` : 'your knowledge base'
+  return (
+    `Uploaded to ${where} in Quberi as "${result.name}". ` +
+    'Quberi is indexing it now; text documents can be found with Quberi search shortly. ' +
+    'Images and scans are stored but not yet searchable by their content.'
+  )
+}
 
 /** A short confirmation of a saved note, naming where it landed. */
 export function formatSaveResult(result: SaveResult): string {

@@ -33,6 +33,9 @@ export interface FakeQuberi {
   tokenAnswer?: (form: URLSearchParams) => { status: number; body: unknown }
   searchAnswer?: (auth: string) => { status: number; body: unknown }
   saveAnswer?: (auth: string, body: string) => { status: number; body: unknown }
+  uploadAnswer?: (auth: string, form: FormData) => { status: number; body: unknown }
+  /** The multipart bodies the fake received, in order. */
+  uploads: FormData[]
   /** Scope stamped on tokens the fake issues; default read + write. */
   grantedScope: string
   tokenCounter: number
@@ -61,12 +64,14 @@ export function metadata(base = BASE, over: Record<string, unknown> = {}): Recor
 export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = {}): FakeQuberi {
   const fake: FakeQuberi = {
     calls: [],
+    uploads: [],
     tokenCounter: 0,
     grantedScope: 'knowledge:read knowledge:write',
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const headers = (init?.headers ?? {}) as Record<string, string>
-      const body = init?.body === undefined ? '' : String(init.body)
+      const isForm = init?.body instanceof FormData
+      const body = init?.body === undefined ? '' : isForm ? '[multipart]' : String(init.body)
       fake.calls.push({ url, method: init?.method ?? 'GET', headers, body })
       if (url.endsWith('/.well-known/oauth-authorization-server')) {
         return json(200, metadata(base, metadataOver))
@@ -120,6 +125,24 @@ export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = 
           space_id: 'sp-1',
           space_name: 'My space',
           name: 'Note.md',
+        })
+      }
+      if (url.endsWith('/api/v1/external/upload')) {
+        const auth = headers.Authorization ?? ''
+        const form = init?.body as FormData
+        fake.uploads.push(form)
+        if (fake.uploadAnswer) {
+          const answer = fake.uploadAnswer(auth, form)
+          return json(answer.status, answer.body)
+        }
+        const file = form.get('file') as File
+        return json(201, {
+          document_id: 'doc-2',
+          space_id: 'sp-1',
+          space_name: 'My space',
+          name: file.name,
+          mime_type: 'application/pdf',
+          size_bytes: file.size,
         })
       }
       return json(404, {})

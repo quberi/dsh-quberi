@@ -634,6 +634,29 @@ describe('saveNote', () => {
     await expect(controller.saveNote({ title: 't', text: 'b', space: 'nope' })).rejects.toThrow(/name|personal space/i)
   })
 
+  it('asks which space to use when the person has no personal space', async () => {
+    const fake = fakeQuberi()
+    fake.saveAnswer = () => ({
+      status: 409,
+      body: { detail: { code: 'space_required', spaces: ['Product team', '  Ops\nwiki ', 7, ''] } },
+    })
+    const { controller } = make({}, fake)
+    const { state, redirect } = await startLogin(controller)
+    await callback(redirect, { code: 'c', state })
+    const failure = controller.saveNote({ title: 't', text: 'b' })
+    await expect(failure).rejects.toThrow(/Nothing was saved/)
+    await expect(failure).rejects.toThrow(/Product team, Ops wiki\./)
+  })
+
+  it('still asks when the server lists no spaces', async () => {
+    const fake = fakeQuberi()
+    fake.saveAnswer = () => ({ status: 409, body: { detail: { code: 'space_required' } } })
+    const { controller } = make({}, fake)
+    const { state, redirect } = await startLogin(controller)
+    await callback(redirect, { code: 'c', state })
+    await expect(controller.saveNote({ title: 't', text: 'b' })).rejects.toThrow(/which space/i)
+  })
+
   it('turns a space-you-cannot-edit 403 into a helpful message', async () => {
     const fake = fakeQuberi()
     fake.saveAnswer = () => ({ status: 403, body: { detail: { code: 'forbidden' } } })
