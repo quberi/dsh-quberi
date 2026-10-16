@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { QuberiController, QuberiUserError, formatUploadResult } from '../src/controller.js'
+import { QuberiController, QuberiUserError, formatSearchResult, formatUploadResult } from '../src/controller.js'
+import type { SearchResult } from '../src/controller.js'
 import type { ControllerOptions } from '../src/controller.js'
 import { MAX_UPLOAD_BYTES, UploadGate, UploadRefusal, planUpload, readApproved } from '../src/upload.js'
 import { BASE, fakeQuberi, memoryStore, tokens } from './helpers.js'
@@ -414,6 +415,20 @@ describe('uploading through the controller', () => {
     await expect(controller.uploadFile({ data: PDF, filename: 'a.pdf' })).rejects.not.toThrow(/IGNORE/u)
   })
 
+  it('tells the model the file is not searchable yet, and not to answer from other results', () => {
+    const text = formatUploadResult({
+      document_id: 'd',
+      space_id: 's',
+      space_name: '',
+      name: 'AI RMF.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1,
+    })
+    expect(text).toMatch(/cannot be found by search until/u)
+    expect(text).toMatch(/several minutes/u)
+    expect(text).toMatch(/do not treat other results as its content/iu)
+  })
+
   it('confirms where the file landed and what search can and cannot do with it', () => {
     const text = formatUploadResult({
       document_id: 'd',
@@ -425,6 +440,99 @@ describe('uploading through the controller', () => {
     })
     expect(text).toContain('the "Ops" space')
     expect(text).toContain('"a.pdf"')
-    expect(text).toMatch(/not yet searchable/u)
+    expect(text).toMatch(/not searchable by their content/u)
+  })
+})
+
+describe('search says what is still being indexed', () => {
+  function make(scope: string, over: Partial<ControllerOptions> = {}, fake: FakeQuberi = fakeQuberi()) {
+    const controller = new QuberiController({
+      baseUrl: BASE,
+      clientId: 'quberi-harness',
+      scope,
+      callbackPort: 0,
+      loginTimeoutMs: 60_000,
+      requestTimeoutMs: 5_000,
+      refreshSkewMs: 60_000,
+      store: memoryStore(tokens({ scope })),
+      fetch: fake.fetch,
+      focusDelayMs: 0,
+      ...over,
+    })
+    return { controller, fake }
+  }
+
+  const base: SearchResult = { organization: 'Acme', searched_spaces: 2, passages: [], pending_documents: [], pending_total: 0 }
+  const passage = {
+    document_id: 'd1',
+    document_name: 'Policy.docx',
+    space_id: 's1',
+    space_name: 'HR',
+    chunk_index: 0,
+    text: 'Some unrelated text.',
+    score: 0.5,
+  }
+
+  it('says nothing extra when nothing is pending', () => {
+    expect(formatSearchResult('q', { ...base, passages: [passage] })).not.toMatch(/Not searchable yet/u)
+    expect(formatSearchResult('q', base)).not.toMatch(/Not searchable yet/u)
+  })
+
+  it('names the unfinished documents after the passages, so weak matches are not read as the answer', () => {
+    const text = formatSearchResult('ai rmf', {
+      ...base,
+      passages: [passage],
+      pending_total: 1,
+      pending_documents: [{ document_name: 'AI RMF.pdf', space_name: 'Standards', state: 'indexing' }],
+    })
+    expect(text).toMatch(/Not searchable yet: 1 document is in these spaces still being indexed: "AI RMF\.pdf" \(space: Standards\)/u)
+    expect(text).toMatch(/do not present unrelated passages as the answer/u)
+    expect(text.indexOf('Some unrelated text.')).toBeLessThan(text.indexOf('Not searchable yet'))
+  })
+
+  it('says it even when there are no passages at all', () => {
+    const text = formatSearchResult('ai rmf', {
+      ...base,
+      pending_total: 3,
+      pending_documents: [{ document_name: 'A.pdf', space_name: '', state: 'not_indexed' }],
+    })
+    expect(text).toMatch(/found no passages/u)
+    expect(text).toMatch(/3 documents are in these spaces still being indexed: "A\.pdf", and 2 more/u)
+  })
+
+  it('reads the fields from the server, keeps them short, and ignores malformed ones', async () => {
+    const fake = fakeQuberi()
+    const bad = 'x\n'.repeat(200)
+    fake.searchAnswer = () => ({
+      status: 200,
+      body: {
+        organization: 'Acme',
+        searched_spaces: 1,
+        passages: [],
+        pending_total: 12,
+        pending_documents: [
+          { document_name: 'Good.pdf', space_name: 'S', state: 'indexing' },
+          { document_name: bad, space_name: bad, state: 'indexing' },
+          { document_name: 5 },
+          'nope',
+          null,
+        ],
+      },
+    })
+    const { controller } = make('knowledge:read', {}, fake)
+    const result = await controller.search('q', 5)
+    expect(result.pending_total).toBe(12)
+    expect(result.pending_documents).toHaveLength(2)
+    expect(result.pending_documents[0].document_name).toBe('Good.pdf')
+    expect(result.pending_documents[1].document_name).toMatch(/^x x x x/u)
+    expect(result.pending_documents[1].document_name.length).toBeLessThanOrEqual(80)
+    expect(result.pending_documents[1].space_name.length).toBeLessThanOrEqual(60)
+  })
+
+  it('treats an older server that sends nothing as nothing pending', async () => {
+    const { controller } = make('knowledge:read')
+    const result = await controller.search('q', 5)
+    expect(result.pending_documents).toEqual([])
+    expect(result.pending_total).toBe(0)
   })
 })

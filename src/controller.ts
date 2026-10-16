@@ -104,10 +104,21 @@ export interface Passage {
   score: number
 }
 
+/** A document that was uploaded or changed recently and cannot be found by search yet. */
+export interface PendingDocument {
+  document_name: string
+  space_name: string
+  state: string
+}
+
 export interface SearchResult {
   organization: string
   searched_spaces: number
   passages: Passage[]
+  /** Documents in the searched spaces that are still being indexed (newest first, capped). */
+  pending_documents: PendingDocument[]
+  /** How many such documents there are in all. */
+  pending_total: number
 }
 
 export interface SaveResult {
@@ -797,6 +808,7 @@ export class QuberiController {
         organization: typeof body.organization === 'string' ? body.organization : '',
         searched_spaces: typeof body.searched_spaces === 'number' ? body.searched_spaces : 0,
         passages,
+        ...readPending(body),
       }
     }
     let code = ''
@@ -855,6 +867,24 @@ export class QuberiController {
   }
 }
 
+/** The still-indexing documents from a search response, as short plain strings (they reach the model). */
+function readPending(body: Record<string, unknown>): { pending_documents: PendingDocument[]; pending_total: number } {
+  const short = (value: unknown, max: number): string =>
+    typeof value === 'string' ? value.replace(/\s+/gu, ' ').trim().slice(0, max) : ''
+  const listed = Array.isArray(body.pending_documents) ? body.pending_documents : []
+  const pending_documents = listed
+    .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+    .map((item) => ({
+      document_name: short(item.document_name, 80),
+      space_name: short(item.space_name, 60),
+      state: short(item.state, 20),
+    }))
+    .filter((item) => item.document_name !== '')
+    .slice(0, 10)
+  const total = typeof body.pending_total === 'number' && Number.isFinite(body.pending_total) ? Math.trunc(body.pending_total) : 0
+  return { pending_documents, pending_total: Math.max(total, pending_documents.length) }
+}
+
 /** The error code, and any space names, from a Quberi error body. Anything else in it is ignored. */
 function parseErrorDetail(raw: string): { code: string; spaces: string[] } {
   let code = ''
@@ -893,13 +923,15 @@ export function hasScope(scope: string, wanted: string): boolean {
 // Turning a result into text for the model
 // ---------------------------------------------------------------------------
 
-/** A short confirmation of an uploaded file, naming where it landed. */
+/** A short confirmation of an uploaded file, naming where it landed and what happens next. */
 export function formatUploadResult(result: UploadResult): string {
   const where = result.space_name ? `the "${result.space_name}" space` : 'your knowledge base'
   return (
-    `Uploaded to ${where} in Quberi as "${result.name}". ` +
-    'Quberi is indexing it now; text documents can be found with Quberi search shortly. ' +
-    'Images and scans are stored but not yet searchable by their content.'
+    `Uploaded to ${where} in Quberi as "${result.name}". It is stored, but it cannot be found by search until Quberi has indexed it. ` +
+    'A short note takes about a minute; a large PDF or Office file can take several minutes. ' +
+    'Do not search for it straight away and do not treat other results as its content: tell the user it is still being indexed, ' +
+    'and that a search will mention it as "still being indexed" until it is ready. ' +
+    'Images are stored but are not searchable by their content.'
   )
 }
 
@@ -909,13 +941,33 @@ export function formatSaveResult(result: SaveResult): string {
   return `Saved to ${where} in Quberi as "${result.name}". It can now be found with Quberi search.`
 }
 
+/**
+ * Say which documents cannot be found yet. Without this, a search for something
+ * just uploaded returns whatever else is nearby with a middling score, which
+ * reads as "found it" when it is not.
+ */
+function pendingNote(result: SearchResult): string[] {
+  if (!result.pending_total || result.pending_documents.length === 0) return []
+  const names = result.pending_documents.map((d) => `"${d.document_name}"${d.space_name ? ` (space: ${d.space_name})` : ''}`)
+  const more = result.pending_total - names.length
+  const list = names.join(', ') + (more > 0 ? `, and ${more} more` : '')
+  return [
+    `Not searchable yet: ${result.pending_total} document${result.pending_total === 1 ? ' is' : 's are'} in these spaces still being indexed: ${list}.`,
+    'If the user is asking about something they just uploaded or saved, say it is still being indexed and to try again in a few minutes; do not present unrelated passages as the answer.',
+  ]
+}
+
 /** Quote the passages as data, with their sources, so the model can cite them. */
 export function formatSearchResult(query: string, result: SearchResult): string {
+  const pending = pendingNote(result)
   if (result.searched_spaces === 0) {
     return 'Quberi searched nothing: this account cannot read any knowledge spaces in the selected organization yet.'
   }
   if (result.passages.length === 0) {
-    return `Quberi found no passages for "${query}". The knowledge base may not cover it, or the relevant spaces may not be readable by this account.`
+    return [
+      `Quberi found no passages for "${query}". The knowledge base may not cover it, or the relevant spaces may not be readable by this account.`,
+      ...pending,
+    ].join('\n')
   }
   const lines = [
     `Quberi results for "${query}" (${result.passages.length} passage${result.passages.length === 1 ? '' : 's'}` +
@@ -930,5 +982,6 @@ export function formatSearchResult(query: string, result: SearchResult): string 
     lines.push(p.text.trim())
     lines.push('')
   })
+  if (pending.length > 0) lines.push(...pending)
   return lines.join('\n').trimEnd()
 }

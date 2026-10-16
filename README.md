@@ -116,8 +116,11 @@ Quberi then checks the file's actual content (not its name or label) and has the
 final word: png, jpeg, gif, webp, pdf, docx, xlsx, pptx, md, csv, txt and json
 are accepted, up to 25 MB. Archives, HTML, SVG, executables and legacy `.doc` /
 `.xls` are refused. PDF, Office, Markdown, CSV, text and JSON files are indexed
-for search shortly after upload; images are stored but are not yet searchable by
-their content.
+for search after upload, which is not instant: about a minute for a short note,
+several minutes for a large PDF. Until a file is indexed, search cannot find it;
+a search tells the model which documents are still being indexed so it can say so
+instead of presenting unrelated passages as the answer. Images are stored but are
+not yet searchable by their content.
 
 Anyone who can read the destination space can find the file. Uploading is a
 separate permission (`knowledge:upload`), recorded in the audit log as the

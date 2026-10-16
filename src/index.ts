@@ -255,6 +255,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         "Upload one file from the current workspace into the user's Quberi knowledge base, so it can be found " +
         'later with quberi_search (PDF, Word, Excel, PowerPoint, Markdown, CSV, text and JSON are indexed for search; ' +
         'images are stored but not yet searchable by content). ' +
+        'Indexing is not instant: about a minute for a short note, several minutes for a large PDF. Until then a search ' +
+        'cannot find the file, so do not search for it right after uploading; tell the user it is still being indexed. ' +
         'Only use it when the user asked you to upload or keep that specific file. ' +
         'The user is shown the exact file, its size and the destination space and must approve every upload, ' +
         'so say which file you are about to upload. ' +
