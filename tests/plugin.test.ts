@@ -93,7 +93,7 @@ describe('plugin wiring', () => {
     const spaces = registered.tools.find((t) => t.name === 'quberi_list_spaces')!
     expect(Object.keys(spaces.parameters.properties ?? {})).toEqual([])
     const documents = registered.tools.find((t) => t.name === 'quberi_list_documents')!
-    expect(Object.keys(documents.parameters.properties).sort()).toEqual(['cursor', 'space'])
+    expect(Object.keys(documents.parameters.properties).sort()).toEqual(['cursor', 'space', 'type'])
     expect(documents.parameters.required).toEqual(['space'])
   })
 

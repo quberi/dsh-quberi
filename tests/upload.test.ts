@@ -453,7 +453,10 @@ describe('uploading through the controller', () => {
     })
     expect(text).toContain('the "Ops" space')
     expect(text).toContain('"a.pdf"')
-    expect(text).toMatch(/not searchable by their content/u)
+    // Pictures are found in the Quberi chat, not by quberi_search: say so rather than "not searchable".
+    expect(text).toMatch(/by picture or description in the Quberi chat/u)
+    expect(text).toMatch(/quberi_search does not return pictures/u)
+    expect(text).not.toMatch(/not searchable by their content/u)
   })
 })
 
@@ -593,6 +596,25 @@ describe('browsing spaces and documents through the controller', () => {
     expect(urls[1].get('cursor')).toBe('abc123')
   })
 
+  it('narrows the listing to one kind, and refuses a kind that does not exist', async () => {
+    const fake = fakeQuberi()
+    const { controller } = make(fake)
+    await controller.listDocuments({ space: 'S', type: ' Image ' })
+    await controller.listDocuments({ space: 'S' })
+    const urls = fake.calls.filter((c) => c.url.includes('/external/documents')).map((c) => new URL(c.url).searchParams)
+    expect(urls[0].get('type')).toBe('image')
+    expect(urls[1].has('type')).toBe(false)
+    await expect(controller.listDocuments({ space: 'S', type: 'videos' })).rejects.toThrow(/Unknown document type "videos".*image, pdf/u)
+    expect(fake.calls.filter((c) => c.url.includes('/external/documents'))).toHaveLength(2) // nothing sent for the bad one
+  })
+  it('does not pass off an unfiltered list as a filtered one when the server ignores the filter', async () => {
+    const fake = fakeQuberi()
+    // An older server: no `type` in the answer.
+    fake.documentsAnswer = () => ({ status: 200, body: { space_name: 'S', total: 1, documents: [{ name: 'a.pdf', mime_type: 'application/pdf', size_bytes: 1, updated_at: '', status: 'ready' }] } })
+    const { controller } = make(fake)
+    await expect(controller.listDocuments({ space: 'S', type: 'image' })).rejects.toThrow(/cannot filter by type yet/u)
+    await expect(controller.listDocuments({ space: 'S' })).resolves.toMatchObject({ total: 1 })
+  })
   it('reads the page: metadata only, a next cursor when there is one', async () => {
     const fake = fakeQuberi()
     fake.documentsAnswer = () => ({
@@ -700,6 +722,19 @@ describe('what the model reads about spaces and documents', () => {
     expect(text).toContain('1 more space is not shown.')
   })
 
+  it('does not call an indexed picture "searchable": quberi_search cannot return it', () => {
+    const text = formatDocumentsResult({
+      space_name: 'Std',
+      total: 2,
+      next_cursor: undefined,
+      documents: [
+        { name: 'part.png', mime_type: 'image/png', size_bytes: 900, updated_at: '', status: 'ready' },
+        { name: 'a.pdf', mime_type: 'application/pdf', size_bytes: 900, updated_at: '', status: 'ready' },
+      ],
+    })
+    expect(text).toMatch(/"part\.png" - image\/png, 900 B, indexed as a picture \(find it by picture or description in the Quberi chat/u)
+    expect(text).toMatch(/"a\.pdf" - application\/pdf, 900 B, searchable$/mu)
+  })
   it('says plainly when there are no spaces', () => {
     expect(formatSpacesResult({ organization: 'A', total: 0, spaces: [] })).toMatch(/cannot read any knowledge spaces/u)
   })
@@ -717,7 +752,7 @@ describe('what the model reads about spaces and documents', () => {
     })
     expect(text).toContain('(showing 3 of 120)')
     expect(text).toContain('1. "A.pdf" - application/pdf, 1.86 MB, updated 2026-10-16 10:10 UTC, searchable')
-    expect(text).toContain('2. "B.png" - image/png, 900 B, updated 2026-10-16 09:00 UTC, not searchable by content')
+    expect(text).toContain('2. "B.png" - image/png, 900 B, updated 2026-10-16 09:00 UTC, not searchable by content (indexing failed or did not finish)')
     expect(text).toContain('3. "C.pdf" - application/pdf, 2.0 KB, still being indexed, not searchable yet')
     expect(text).toContain('call quberi_list_documents again with space "Std" and cursor "next-page"')
     expect(text).toContain('use quberi_search to read what is in them')

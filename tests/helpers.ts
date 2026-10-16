@@ -155,6 +155,7 @@ export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = 
           space_name: query.get('space') ?? '',
           total: 1,
           next_cursor: null,
+          type: query.get('type'),
           documents: [
             { name: 'AI RMF.pdf', mime_type: 'application/pdf', size_bytes: 1946127, updated_at: '2026-10-16T10:10:00Z', status: 'ready' },
           ],

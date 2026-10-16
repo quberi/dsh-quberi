@@ -98,7 +98,9 @@ team spaces, how many documents each holds, and whether you can edit it (so
 whether saving or uploading there would work). `quberi_list_documents` lists the
 documents in one space you name, newest first: name, type, size, last update and
 whether it is searchable yet. It returns up to 50 at a time and hands the model a
-cursor for the next page.
+cursor for the next page. Pass `type` (`image`, `pdf`, `word`, `spreadsheet`,
+`presentation`, `text` or `other`) to list only that kind of file; this needs a
+Quberi server that supports it (an older one ignores the filter).
 
 Both show file information only. They never return what is inside a document
 (that is what search is for) and they do not say who uploaded it. They use the
@@ -147,8 +149,10 @@ are accepted, up to 25 MB. Archives, HTML, SVG, executables and legacy `.doc` /
 for search after upload, which is not instant: about a minute for a short note,
 several minutes for a large PDF. Until a file is indexed, search cannot find it;
 a search tells the model which documents are still being indexed so it can say so
-instead of presenting unrelated passages as the answer. Images are stored but are
-not yet searchable by their content.
+instead of presenting unrelated passages as the answer. A picture is indexed by
+what it shows, so it can be found by picture or description in the Quberi chat
+(when your Quberi server has picture search); `quberi_search` itself returns text
+passages only and does not return pictures.
 
 Anyone who can read the destination space can find the file. Uploading is a
 separate permission (`knowledge:upload`), recorded in the audit log as the

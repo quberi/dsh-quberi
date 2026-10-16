@@ -211,7 +211,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           required: true,
           description:
             'The note body, as Markdown. Include the content worth keeping; it may contain headings, ' +
-            'lists, code blocks, and image links. Images are stored but not yet searchable by content.',
+            'lists, code blocks, and image links. Image links are kept as text; the pictures behind them are not read.',
         },
         space: {
           type: 'string',
@@ -248,7 +248,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       name: 'quberi_list_documents',
       description:
         'List the documents in one Quberi space, newest first: name, type, size, last update and whether each is ' +
-        'searchable yet. Read-only; it shows file information only, never what is inside the files, so use ' +
+        'searchable yet (a picture shows as indexed once it can be found by picture in the Quberi chat). Read-only; it shows file information only, never what is inside the files, so use ' +
         'quberi_search to read content. It returns up to 50 documents; if more are available the result gives a ' +
         'cursor to pass back for the next page. Use quberi_list_spaces first if you do not know the exact space name. ' +
         'Show the result to the user as a Markdown table (name, type, size, updated, status), not in a code block.',
@@ -262,11 +262,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           type: 'string',
           description: "The cursor from the previous page's result, to get the next page. Omit for the first page.",
         },
+        type: {
+          type: 'string',
+          description:
+            'Only list this kind of file: image, pdf, word, spreadsheet, presentation, text or other. ' +
+            'Omit to list everything. Pass the same value again when asking for the next page.',
+        },
       },
       output: textOutput,
       execute: (args, exec) =>
         guarded(exec.signal, async () =>
-          formatDocumentsResult(await controller.listDocuments({ space: args.space, cursor: args.cursor }, exec.signal)),
+          formatDocumentsResult(await controller.listDocuments({ space: args.space, cursor: args.cursor, type: args.type }, exec.signal)),
         ),
     }),
   )
@@ -293,8 +299,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       name: UPLOAD_TOOL,
       description:
         "Upload one file from the current workspace into the user's Quberi knowledge base, so it can be found " +
-        'later with quberi_search (PDF, Word, Excel, PowerPoint, Markdown, CSV, text and JSON are indexed for search; ' +
-        'images are stored but not yet searchable by content). ' +
+        'later with quberi_search (PDF, Word, Excel, PowerPoint, Markdown, CSV, text and JSON are indexed for search). ' +
+        'Pictures are stored and indexed by what they show, so they can be found by picture or description in the ' +
+        'Quberi chat, but quberi_search does not return them. ' +
         'Indexing is not instant: about a minute for a short note, several minutes for a large PDF. Until then a search ' +
         'cannot find the file, so do not search for it right after uploading; tell the user it is still being indexed. ' +
         'Only use it when the user asked you to upload or keep that specific file. ' +
