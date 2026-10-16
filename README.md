@@ -106,15 +106,16 @@ same read permission as search and the same live access rules, so a space or
 document you cannot see in Quberi is not listed. Each use is recorded in the
 audit log (which kind of listing and how many items, never the names).
 
-## How it looks in Harness
+## How it shows up in Harness
 
-Each call shows a short title while it runs (for example "Search knowledge: AI
-RMF" or "Upload file: a.pdf → your personal space") and a tidy card when it is
-done: search results grouped by document, spaces and documents as lists with
-their size, type, time and status. The model reads plain text; the cards are only
-for you, and everything that comes from your documents is shown as text, so a
-file called `![x](http://example.com)` cannot draw an image or a link. Cards use
-Chinese when your system language is Chinese, English otherwise.
+Harness lists a plugin's tool calls as plain rows ("Tool call · quberi_search"
+plus a summary of the arguments) and does not display custom cards from
+plugins. What you read is the model's own answer. The tools therefore return
+plain text, and ask the model to answer in your language, to show spaces as a
+list and documents as a table, to name the document each point comes from, and
+not to wrap any of it in a code block. That is a request to the model, not a
+guarantee, so the layout can vary between models. The upload approval prompt is
+different: Harness itself shows it, with the file, its size and the destination.
 
 ## Uploading files
 

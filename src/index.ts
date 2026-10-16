@@ -15,7 +15,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialKey } from '@deepseek-ai/dsh-credentials'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { ToolCallView, ToolResult, ToolResultView } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
 // Side-effect type import: declaration-merges `ctx.commands` onto Context.
 import type {} from '@deepseek-ai/dsh-commands'
@@ -33,8 +32,6 @@ import {
 import type { TokenStore } from './controller.js'
 import { readTokenSet } from './oauth.js'
 import type { TokenSet } from './oauth.js'
-import { callCard, detectLang, documentsCard, saveCard, searchCard, spacesCard, uploadCard } from './present.js'
-import type { CardView } from './present.js'
 import { UploadGate, UploadRefusal, readApproved } from './upload.js'
 
 /** Cordis plugin name. Also the owner scope of the stored sign-in record. */
@@ -49,52 +46,10 @@ export const inject = ['commands', 'credentials', 'tools']
 /** The name of the file-upload tool, which the approval gate recognises. */
 const UPLOAD_TOOL = 'quberi_upload_file'
 
-/**
- * What every tool returns: the plain text the model reads, plus the title and
- * Markdown the conversation shows the person. Only `text` goes to the model.
- */
-interface ToolCard extends CardView {
-  text: string
-}
-
-const toolOutput = {
-  schema: {
-    type: 'object' as const,
-    additionalProperties: false,
-    properties: {
-      text: { type: 'string' as const, required: true as const },
-      title: { type: 'string' as const, required: true as const },
-      markdown: { type: 'string' as const, required: true as const },
-    },
-  },
-  render: (_args: unknown, value: ToolCard) => [{ type: 'text' as const, text: value.text }],
-  presentationMeta: (_args: unknown, value: ToolCard) => ({ title: value.title, markdown: value.markdown }),
-}
-
-/** How a call and its result look in the conversation. Display only; the model's text is untouched. */
-function presenters(tool: string) {
-  return {
-    presentCall(args: unknown): ToolCallView | undefined {
-      const card = callCard(tool, args, detectLang())
-      if (card === undefined) return undefined
-      const path = tool === UPLOAD_TOOL ? (args as { path?: unknown } | null)?.path : undefined
-      return {
-        card: 'generic',
-        title: card.title,
-        kind: card.kind,
-        ...(typeof path === 'string' && path !== '' ? { locations: [{ path }] } : {}),
-      }
-    },
-    presentResult(_args: unknown, result: ToolResult): ToolResultView | undefined {
-      const meta = result.meta as { title?: unknown; markdown?: unknown } | undefined
-      if (result.isError || typeof meta?.title !== 'string' || typeof meta.markdown !== 'string') return undefined
-      return {
-        card: 'generic',
-        title: meta.title,
-        ...(meta.markdown === '' ? {} : { content: [{ type: 'text' as const, text: meta.markdown }] }),
-      }
-    },
-  }
+/** What every tool returns: plain text for the model, which writes the answer the person reads. */
+const textOutput = {
+  schema: { type: 'string' as const },
+  render: (_args: unknown, value: string) => [{ type: 'text' as const, text: value }],
 }
 
 /** Run a tool body, keeping network and parsing detail out of the model's context. */
@@ -226,13 +181,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           description: 'How many passages to return, 1 to 10 (default 5).',
         },
       },
-      output: toolOutput,
-      ...presenters('quberi_search'),
+      output: textOutput,
       execute: (args, exec) =>
-        guarded(exec.signal, async (): Promise<ToolCard> => {
-          const result = await controller.search(args.query, args.top_k ?? 5, exec.signal)
-          return { text: formatSearchResult(args.query, result), ...searchCard(args.query, result, detectLang()) }
-        }),
+        guarded(exec.signal, async () =>
+          formatSearchResult(args.query, await controller.search(args.query, args.top_k ?? 5, exec.signal)),
+        ),
     }),
   )
 
@@ -267,13 +220,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             'Omit to use the user\'s personal space.',
         },
       },
-      output: toolOutput,
-      ...presenters('quberi_save'),
+      output: textOutput,
       execute: (args, exec) =>
-        guarded(exec.signal, async (): Promise<ToolCard> => {
-          const result = await controller.saveNote({ title: args.title, text: args.text, space: args.space }, exec.signal)
-          return { text: formatSaveResult(result), ...saveCard(args.title, result, detectLang()) }
-        }),
+        guarded(exec.signal, async () =>
+          formatSaveResult(await controller.saveNote({ title: args.title, text: args.text, space: args.space }, exec.signal)),
+        ),
     }),
   )
 
@@ -284,15 +235,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         "List the Quberi spaces the user can read: their personal space and the team spaces, with how many documents " +
         'each holds and whether the user can edit it (so whether saving or uploading there will work). ' +
         'Read-only; it shows names and counts, not document contents. Use it to learn the exact space names ' +
-        'before listing documents, saving or uploading into a team space.',
+        'before listing documents, saving or uploading into a team space. ' +
+        'Show the result to the user as a short Markdown list, not in a code block.',
       parameters: {},
-      output: toolOutput,
-      ...presenters('quberi_list_spaces'),
-      execute: (_args, exec) =>
-        guarded(exec.signal, async (): Promise<ToolCard> => {
-          const result = await controller.listSpaces(exec.signal)
-          return { text: formatSpacesResult(result), ...spacesCard(result, detectLang()) }
-        }),
+      output: textOutput,
+      execute: (_args, exec) => guarded(exec.signal, async () => formatSpacesResult(await controller.listSpaces(exec.signal))),
     }),
   )
 
@@ -303,7 +250,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         'List the documents in one Quberi space, newest first: name, type, size, last update and whether each is ' +
         'searchable yet. Read-only; it shows file information only, never what is inside the files, so use ' +
         'quberi_search to read content. It returns up to 50 documents; if more are available the result gives a ' +
-        'cursor to pass back for the next page. Use quberi_list_spaces first if you do not know the exact space name.',
+        'cursor to pass back for the next page. Use quberi_list_spaces first if you do not know the exact space name. ' +
+        'Show the result to the user as a Markdown table (name, type, size, updated, status), not in a code block.',
       parameters: {
         space: {
           type: 'string',
@@ -315,13 +263,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           description: "The cursor from the previous page's result, to get the next page. Omit for the first page.",
         },
       },
-      output: toolOutput,
-      ...presenters('quberi_list_documents'),
+      output: textOutput,
       execute: (args, exec) =>
-        guarded(exec.signal, async (): Promise<ToolCard> => {
-          const result = await controller.listDocuments({ space: args.space, cursor: args.cursor }, exec.signal)
-          return { text: formatDocumentsResult(result), ...documentsCard(result, detectLang()) }
-        }),
+        guarded(exec.signal, async () =>
+          formatDocumentsResult(await controller.listDocuments({ space: args.space, cursor: args.cursor }, exec.signal)),
+        ),
     }),
   )
 
@@ -367,16 +313,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           description: "Name of the team space to upload into, as the user refers to it. Omit to use the user's personal space.",
         },
       },
-      output: toolOutput,
-      ...presenters(UPLOAD_TOOL),
+      output: textOutput,
       execute: (_args, exec) =>
-        guarded(exec.signal, async (): Promise<ToolCard> => {
+        guarded(exec.signal, async () => {
           try {
             // Refuses unless the approval question for this very call was asked.
             const plan = gate.take(exec.callId)
             const data = await readApproved(plan)
-            const result = await controller.uploadFile({ data, filename: plan.filename, space: plan.space }, exec.signal)
-            return { text: formatUploadResult(result), ...uploadCard(result, detectLang()) }
+            return formatUploadResult(
+              await controller.uploadFile({ data, filename: plan.filename, space: plan.space }, exec.signal),
+            )
           } catch (error) {
             if (error instanceof UploadRefusal) throw new QuberiUserError(error.message)
             throw error
