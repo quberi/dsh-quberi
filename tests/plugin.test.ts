@@ -78,8 +78,8 @@ describe('plugin wiring', () => {
     expect(effects).toHaveLength(1)
 
     const search = registered.tools.find((t) => t.name === 'quberi_search')!
-    // Search reads only: it takes a query and an optional count, nothing else.
-    expect(Object.keys(search.parameters.properties).sort()).toEqual(['query', 'top_k'])
+    // Search reads only: a query, an optional space to look in and an optional count, nothing that writes.
+    expect(Object.keys(search.parameters.properties).sort()).toEqual(['query', 'space', 'top_k'])
     expect(search.parameters.required).toEqual(['query'])
 
     const pictures = registered.tools.find((t) => t.name === 'quberi_search_images')!

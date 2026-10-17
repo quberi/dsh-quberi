@@ -6,7 +6,7 @@ knowledge base from DeepSeek Harness.
 Ask Harness a question about your documents. The first time, your browser
 opens by itself so you can approve access; after that the model can call
 `quberi_search`, which finds passages in the documents **you** can read in
-Quberi, in the one organization you pick. It can also call `quberi_save` to add
+Quberi, in the one organization you pick (name a space to search only that one). It can also call `quberi_save` to add
 a note (a conclusion, decision or summary from the chat) to your knowledge base,
 and `quberi_upload_file` to add a file from your workspace. `quberi_list_spaces`
 and `quberi_list_documents` show what is there, and `quberi_search_images` finds

@@ -177,6 +177,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           required: true,
           description: 'What to look for, phrased as a question or key phrase.',
         },
+        space: {
+          type: 'string',
+          description:
+            'Only look in this space, named exactly as quberi_list_spaces shows it. Omit to look in every readable space.',
+        },
         top_k: {
           type: 'number',
           description: 'How many passages to return, 1 to 10 (default 5).',
@@ -185,7 +190,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       output: textOutput,
       execute: (args, exec) =>
         guarded(exec.signal, async () =>
-          formatSearchResult(args.query, await controller.search(args.query, args.top_k ?? 5, exec.signal)),
+          formatSearchResult(
+            args.query,
+            await controller.search(args.query, args.top_k ?? 5, exec.signal, args.space),
+          ),
         ),
     }),
   )

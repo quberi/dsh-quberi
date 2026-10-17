@@ -229,6 +229,30 @@ describe('tokens', () => {
     expect(fake.calls.filter((c) => c.url.endsWith('/external/search'))).toHaveLength(5)
   })
 
+  it('searches every space unless one is named, and sends the name trimmed when it is', async () => {
+    const fake = fakeQuberi()
+    const { controller, store } = make({}, fake)
+    store.value = tokens()
+    await controller.search('x', 5)
+    await controller.search('x', 5, undefined, '  ')
+    await controller.search('x', 5, undefined, ' 产品团队 ')
+    const bodies = fake.calls.filter((c) => c.url.endsWith('/external/search')).map((c) => JSON.parse(c.body ?? '{}'))
+    expect(bodies[0]).toEqual({ query: 'x', top_k: 5 })
+    expect(bodies[1]).toEqual({ query: 'x', top_k: 5 })
+    expect(bodies[2]).toEqual({ query: 'x', top_k: 5, space: '产品团队' })
+  })
+
+  it('explains an unknown space, and an older server that cannot limit a search', async () => {
+    const fake = fakeQuberi()
+    const { controller, store } = make({}, fake)
+    store.value = tokens()
+    fake.searchAnswer = () => ({ status: 404, body: { detail: { code: 'space_not_found' } } })
+    await expect(controller.search('x', 5, undefined, 'nope')).rejects.toThrow(/No space by that name.*quberi_list_spaces/)
+    fake.searchAnswer = () => ({ status: 422, body: { detail: [] } })
+    await expect(controller.search('x', 5, undefined, 'Ops')).rejects.toThrow(/cannot limit a search to one space/)
+    await expect(controller.search('x', 5)).rejects.toThrow(/could not complete the search \(HTTP 422\)/)
+  })
+
   it('a rejected token is refreshed once and the search retried', async () => {
     const fake = fakeQuberi()
     fake.searchAnswer = (auth) =>

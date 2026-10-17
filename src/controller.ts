@@ -633,11 +633,14 @@ export class QuberiController {
   // Search
   // -------------------------------------------------------------------------
 
-  async search(query: string, topK: number, signal?: AbortSignal): Promise<SearchResult> {
+  async search(query: string, topK: number, signal?: AbortSignal, space?: string): Promise<SearchResult> {
     const text = query.trim()
     if (text.length === 0) throw new QuberiUserError('The search query is empty.')
     if (text.length > MAX_QUERY_CHARS) throw new QuberiUserError(`The search query is longer than ${MAX_QUERY_CHARS} characters.`)
     const top = Math.min(10, Math.max(1, Math.trunc(Number.isFinite(topK) ? topK : 5)))
+    const payload: Record<string, unknown> = { query: text, top_k: top }
+    const onlySpace = space?.trim()
+    if (onlySpace) payload.space = onlySpace
 
     await this.connectIfNeeded(signal)
     let tokens = await this.freshTokens()
@@ -647,7 +650,7 @@ export class QuberiController {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.accessToken}` },
-          body: JSON.stringify({ query: text, top_k: top }),
+          body: JSON.stringify(payload),
         },
         signal,
       )
@@ -656,7 +659,7 @@ export class QuberiController {
         tokens = await this.freshTokens(tokens.accessToken)
         continue
       }
-      return this.readSearchResponse(response)
+      return this.readSearchResponse(response, onlySpace !== undefined && onlySpace !== '')
     }
   }
 
@@ -1067,7 +1070,7 @@ export class QuberiController {
     })
   }
 
-  private async readSearchResponse(response: Awaited<ReturnType<typeof fetch>>): Promise<SearchResult> {
+  private async readSearchResponse(response: Awaited<ReturnType<typeof fetch>>, spaceGiven = false): Promise<SearchResult> {
     const raw = await response.text()
     if (response.ok) {
       const body = parseJsonObject(raw, 'Quberi search response')
@@ -1092,6 +1095,14 @@ export class QuberiController {
     }
     if (response.status === 403 && code === 'external_tools_disabled') {
       throw new QuberiUserError('Your Quberi organization has turned off outside tools. Ask an owner or admin to turn them on.')
+    }
+    if (response.status === 404 && code === 'space_not_found') {
+      throw new QuberiUserError(
+        'No space by that name that you can read. Check the name with quberi_list_spaces, or leave it out to search every space.',
+      )
+    }
+    if (response.status === 422 && spaceGiven) {
+      throw new QuberiUserError('This Quberi server cannot limit a search to one space yet. Leave the space out.')
     }
     if (response.status === 429) {
       throw new QuberiUserError('Quberi is rate limiting searches from this sign-in. Wait a minute and try again.')
