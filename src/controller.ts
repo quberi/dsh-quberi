@@ -144,6 +144,8 @@ export interface SpaceInfo {
   kind: 'personal' | 'shared'
   can_edit: boolean
   document_count: number
+  /** More than 0 when only that many documents of this space are shared with the person. */
+  shared_only_documents?: number
 }
 
 export interface SpacesResult {
@@ -770,6 +772,7 @@ export class QuberiController {
           kind: item.kind === 'personal' ? 'personal' : 'shared',
           can_edit: item.can_edit === true,
           document_count: count(item.document_count),
+          shared_only_documents: count(item.shared_only_documents),
         }),
       )
       .filter((item) => item.name !== '')
@@ -1243,7 +1246,12 @@ export function formatSpacesResult(result: SpacesResult): string {
   for (const space of result.spaces) {
     const kind = space.kind === 'personal' ? 'personal space' : 'shared space'
     const right = space.can_edit ? 'can edit' : 'read only'
-    lines.push(`- "${space.name}" (${kind}, ${right}, ${space.document_count} document${space.document_count === 1 ? '' : 's'})`)
+    const sharedOnly = space.shared_only_documents ?? 0
+    const docs =
+      sharedOnly > 0
+        ? `only ${sharedOnly} shared document${sharedOnly === 1 ? '' : 's'}`
+        : `${space.document_count} document${space.document_count === 1 ? '' : 's'}`
+    lines.push(`- "${space.name}" (${kind}, ${right}, ${docs})`)
   }
   const more = result.total - result.spaces.length
   if (more > 0) lines.push('', `${more} more space${more === 1 ? ' is' : 's are'} not shown.`)

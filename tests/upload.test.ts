@@ -707,6 +707,19 @@ describe('browsing spaces and documents through the controller', () => {
 })
 
 describe('what the model reads about spaces and documents', () => {
+  it('says when a space is reachable only through documents shared one by one', () => {
+    const text = formatSpacesResult({
+      organization: 'A',
+      total: 2,
+      spaces: [
+        { name: 'Legal', kind: 'shared', can_edit: false, document_count: 1, shared_only_documents: 1 },
+        { name: 'Ops', kind: 'shared', can_edit: true, document_count: 4, shared_only_documents: 0 },
+      ],
+    })
+    expect(text).toContain('"Legal" (shared space, read only, only 1 shared document)')
+    expect(text).toContain('"Ops" (shared space, can edit, 4 documents)')
+  })
+
   it('lists spaces as data, with the edit right spelled out', () => {
     const text = formatSpacesResult({
       organization: 'Acme',
