@@ -24,6 +24,7 @@ import {
   QuberiController,
   QuberiUserError,
   formatDocumentsResult,
+  formatImageSearchResult,
   formatSaveResult,
   formatSearchResult,
   formatSpacesResult,
@@ -191,6 +192,40 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
 
   ctx.tools.register(
     defineTool({
+      name: 'quberi_search_images',
+      description:
+        "Find pictures in the user's Quberi knowledge base from a description (for example \"a red bracket with two holes\"), " +
+        'in the spaces they are allowed to read. Returns the closest pictures with their name, space and a short-lived preview ' +
+        'address; follow the instructions in the result to show the pictures in your answer. Read-only. ' +
+        'Use it when the user asks for pictures, photos, drawings or parts by how they look; use quberi_search for text. ' +
+        'Only pictures that have finished indexing can be found.',
+      parameters: {
+        query: {
+          type: 'string',
+          required: true,
+          description: 'What the picture looks like, in a short sentence (up to 500 characters).',
+        },
+        space: {
+          type: 'string',
+          description: 'Only look in this space, named exactly as quberi_list_spaces shows it. Omit to look in every readable space.',
+        },
+        top_k: {
+          type: 'number',
+          description: 'How many pictures to return, 1 to 10 (default 6).',
+        },
+      },
+      output: textOutput,
+      execute: (args, exec) =>
+        guarded(exec.signal, async () =>
+          formatImageSearchResult(
+            args.query,
+            await controller.searchImages({ query: args.query, space: args.space, top_k: args.top_k }, exec.signal),
+          ),
+        ),
+    }),
+  )
+  ctx.tools.register(
+    defineTool({
       name: 'quberi_save',
       description:
         "Save a note into the user's Quberi knowledge base so it can be found later with quberi_search. " +
@@ -248,7 +283,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       name: 'quberi_list_documents',
       description:
         'List the documents in one Quberi space, newest first: name, type, size, last update and whether each is ' +
-        'searchable yet (a picture shows as indexed once it can be found by picture in the Quberi chat). Read-only; it shows file information only, never what is inside the files, so use ' +
+        'searchable yet (a picture shows as indexed once quberi_search_images can find it). Read-only; it shows file information only, never what is inside the files, so use ' +
         'quberi_search to read content. It returns up to 50 documents; if more are available the result gives a ' +
         'cursor to pass back for the next page. Use quberi_list_spaces first if you do not know the exact space name. ' +
         'Show the result to the user as a Markdown table (name, type, size, updated, status), not in a code block.',
@@ -300,8 +335,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       description:
         "Upload one file from the current workspace into the user's Quberi knowledge base, so it can be found " +
         'later with quberi_search (PDF, Word, Excel, PowerPoint, Markdown, CSV, text and JSON are indexed for search). ' +
-        'Pictures are stored and indexed by what they show, so they can be found by picture or description in the ' +
-        'Quberi chat, but quberi_search does not return them. ' +
+        'Pictures are stored and indexed by what they show, so quberi_search_images can find them from a description ' +
+        '(quberi_search returns text passages only). ' +
         'Indexing is not instant: about a minute for a short note, several minutes for a large PDF. Until then a search ' +
         'cannot find the file, so do not search for it right after uploading; tell the user it is still being indexed. ' +
         'Only use it when the user asked you to upload or keep that specific file. ' +

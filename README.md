@@ -9,9 +9,10 @@ opens by itself so you can approve access; after that the model can call
 Quberi, in the one organization you pick. It can also call `quberi_save` to add
 a note (a conclusion, decision or summary from the chat) to your knowledge base,
 and `quberi_upload_file` to add a file from your workspace. `quberi_list_spaces`
-and `quberi_list_documents` show what is there. Saving is new in 0.3.0 and
-uploading in 0.4.0; each needs a fresh sign-in that includes it. Browsing needs
-nothing beyond search. An
+and `quberi_list_documents` show what is there, and `quberi_search_images` finds
+pictures from a description and shows them in the chat. Saving is new in 0.3.0
+and uploading in 0.4.0; each needs a fresh sign-in that includes it. Browsing and
+picture search need nothing beyond search. An
 upload only happens after **you approve that file** (see Uploading files).
 
 ## Install
@@ -91,6 +92,25 @@ A saved note becomes a document in that space. **Anyone who can read that space
 can find it**, so name a shared space only on purpose. Saving is recorded in
 the audit log (the tool's name and the new document, not the text).
 
+## Finding pictures
+`quberi_search_images` finds pictures from a description ("a red bracket with two
+holes") in the spaces you can read, closest first, optionally in one named space.
+Harness cannot show a picture a tool returns, but it does show a Markdown image
+in the model's reply, so each result carries a link to a small preview (a JPEG of
+at most 320 px) and the model is asked to paste it into its answer exactly as
+given. Three things follow from that:
+- The link is short-lived (about ten minutes) and names one picture for you. It
+  works without a sign-in header, so anyone who has the link can open that one
+  small preview until it expires. It stops working at once if you revoke this
+  tool in Quberi, lose access to the space, or the picture is deleted or archived.
+- The model has to copy the link without changing it. That is a request, not a
+  guarantee: a model can drop or alter it, and then no preview appears. Ask again.
+- The plugin only passes on links that point at your Quberi address, so a reply
+  cannot send the chat window to some other site.
+The search runs the same space isolation as text search, and each use is recorded
+in the audit log (the pictures returned, never your description). It needs a
+Quberi server with picture search; an older one says so.
+
 ## Browsing
 
 `quberi_list_spaces` lists the spaces you can read: your personal space and the
@@ -150,9 +170,9 @@ for search after upload, which is not instant: about a minute for a short note,
 several minutes for a large PDF. Until a file is indexed, search cannot find it;
 a search tells the model which documents are still being indexed so it can say so
 instead of presenting unrelated passages as the answer. A picture is indexed by
-what it shows, so it can be found by picture or description in the Quberi chat
-(when your Quberi server has picture search); `quberi_search` itself returns text
-passages only and does not return pictures.
+what it shows, so `quberi_search_images` can find it from a description (when
+your Quberi server has picture search); `quberi_search` itself returns text
+passages only.
 
 Anyone who can read the destination space can find the file. Uploading is a
 separate permission (`knowledge:upload`), recorded in the audit log as the

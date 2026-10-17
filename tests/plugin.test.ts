@@ -69,6 +69,7 @@ describe('plugin wiring', () => {
     expect(registered.commands.map((c) => c.name)).toEqual(['quberi'])
     expect(registered.tools.map((t) => t.name)).toEqual([
       'quberi_search',
+      'quberi_search_images',
       'quberi_save',
       'quberi_list_spaces',
       'quberi_list_documents',
@@ -81,6 +82,10 @@ describe('plugin wiring', () => {
     expect(Object.keys(search.parameters.properties).sort()).toEqual(['query', 'top_k'])
     expect(search.parameters.required).toEqual(['query'])
 
+    const pictures = registered.tools.find((t) => t.name === 'quberi_search_images')!
+    // Picture search takes words, an optional space name and a count: no file, no URL.
+    expect(Object.keys(pictures.parameters.properties).sort()).toEqual(['query', 'space', 'top_k'])
+    expect(pictures.parameters.required).toEqual(['query'])
     const save = registered.tools.find((t) => t.name === 'quberi_save')!
     // Save takes the note (title + text) and an optional target space name.
     expect(Object.keys(save.parameters.properties).sort()).toEqual(['space', 'text', 'title'])
@@ -296,6 +301,7 @@ describe('file upload: the approval gate', () => {
     const { registered, listener } = await mounted(workspace(), { uploadFiles: false })
     expect(registered.tools.map((t) => t.name)).toEqual([
       'quberi_search',
+      'quberi_search_images',
       'quberi_save',
       'quberi_list_spaces',
       'quberi_list_documents',
@@ -324,7 +330,7 @@ describe('what each tool hands back to the model', () => {
 
   it('is plain text: Harness shows these tools as generic rows, so the model writes the answer', async () => {
     const { tool, restore } = await mountedWithFake()
-    for (const name of ['quberi_search', 'quberi_save', 'quberi_list_spaces', 'quberi_list_documents', 'quberi_upload_file']) {
+    for (const name of ['quberi_search', 'quberi_search_images', 'quberi_save', 'quberi_list_spaces', 'quberi_list_documents', 'quberi_upload_file']) {
       const def = tool(name)
       expect(def.output.schema).toEqual({ type: 'string' })
       expect(def.output.render({}, 'hello')).toEqual([{ type: 'text', text: 'hello' }])
@@ -367,6 +373,17 @@ describe('what each tool hands back to the model', () => {
     restore()
   })
 
+  it('finds pictures from a description and hands the model ready-made image lines', async () => {
+    const { tool, fake, restore } = await mountedWithFake()
+    const text = await tool('quberi_search_images').execute({ query: 'a bracket', space: 'Parts', top_k: 3 }, exec())
+    expect(text).toContain('1. "bracket.png" (space: Parts), closeness 0.91')
+    expect(text).toContain('![bracket.png](https://api.quberi.com/api/v1/external/preview/AbC_-123.jpg)')
+    expect(text).toMatch(/exactly as given, on its own line/u)
+    expect(text).toMatch(/Do not shorten or change it/u)
+    const sent = JSON.parse(fake.calls.find((c) => c.url.endsWith('/external/images/search'))!.body)
+    expect(sent).toEqual({ query: 'a bracket', top_k: 3, space: 'Parts' })
+    restore()
+  })
   it('keeps its own guidance above the user\'s data, so a document name cannot pose as an instruction', async () => {
     const { tool, restore } = await mountedWithFake((f) => {
       f.spacesAnswer = () => ({

@@ -36,6 +36,7 @@ export interface FakeQuberi {
   uploadAnswer?: (auth: string, form: FormData) => { status: number; body: unknown }
   spacesAnswer?: (auth: string) => { status: number; body: unknown }
   documentsAnswer?: (auth: string, query: URLSearchParams) => { status: number; body: unknown }
+  imagesAnswer?: (auth: string, body: string) => { status: number; body: unknown }
   /** The multipart bodies the fake received, in order. */
   uploads: FormData[]
   /** Scope stamped on tokens the fake issues; default read + write. */
@@ -113,6 +114,21 @@ export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = 
               text: 'Remote work is allowed.',
               score: 0.9,
             },
+          ],
+        })
+      }
+      if (url.endsWith('/api/v1/external/images/search')) {
+        const auth = headers.Authorization ?? ''
+        if (fake.imagesAnswer) {
+          const answer = fake.imagesAnswer(auth, body)
+          return json(answer.status, answer.body)
+        }
+        return json(200, {
+          organization: 'Acme',
+          searched_spaces: 2,
+          preview_expires_in: 600,
+          images: [
+            { name: 'bracket.png', space_name: 'Parts', mime_type: 'image/png', size_bytes: 10, score: 0.91234, preview_url: `${BASE}/api/v1/external/preview/AbC_-123.jpg` },
           ],
         })
       }

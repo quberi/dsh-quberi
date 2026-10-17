@@ -1,6 +1,6 @@
 {
   "name": "dsh-quberi",
-  "description": "Search, browse, save notes and upload files to your Quberi knowledge base from DeepSeek Harness (OAuth sign-in)",
+  "description": "Search (text and pictures), browse, save notes and upload files to your Quberi knowledge base from DeepSeek Harness (OAuth sign-in)",
   "version": "0.5.2",
   "private": false,
   "type": "module",
