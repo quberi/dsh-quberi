@@ -61,6 +61,8 @@ const WRITE_SCOPE = 'knowledge:write'
 const UPLOAD_SCOPE = 'knowledge:upload'
 /** A 25 MiB upload over a slow link needs longer than a search does. */
 const UPLOAD_MIN_TIMEOUT_MS = 180_000
+// The first picture search after the server restarts waits for its text model to load (~35 s).
+const IMAGE_SEARCH_MIN_TIMEOUT_MS = 90_000
 
 /** Where the host keeps the token set. Writes are serialized (and cross-process where possible). */
 export interface TokenStore {
@@ -843,6 +845,7 @@ export class QuberiController {
           body: JSON.stringify(payload),
         },
         signal,
+        Math.max(this.options.requestTimeoutMs, IMAGE_SEARCH_MIN_TIMEOUT_MS),
       )
       if (response.status === 401 && attempt === 0) {
         tokens = await this.freshTokens(tokens.accessToken)
@@ -1125,10 +1128,22 @@ export class QuberiController {
     return run
   }
 
-  private request(input: string, init?: RequestInit, signal?: AbortSignal, timeoutMs?: number): Promise<Response> {
-    const signals = [this.lifetime.signal, AbortSignal.timeout(timeoutMs ?? this.options.requestTimeoutMs)]
+  private async request(input: string, init?: RequestInit, signal?: AbortSignal, timeoutMs?: number): Promise<Response> {
+    const limit = timeoutMs ?? this.options.requestTimeoutMs
+    const timeout = AbortSignal.timeout(limit)
+    const signals = [this.lifetime.signal, timeout]
     if (signal !== undefined) signals.push(signal)
-    return this.fetchImpl(input, { ...init, signal: AbortSignal.any(signals) })
+    try {
+      return await this.fetchImpl(input, { ...init, signal: AbortSignal.any(signals) })
+    } catch (error) {
+      // Only our own time limit: a cancel from the user or from shutdown stays as it was.
+      if (timeout.aborted && this.lifetime.signal.aborted === false && signal?.aborted !== true) {
+        throw new QuberiUserError(
+          `Quberi did not answer within ${Math.round(limit / 1000)} seconds. Try again; if the server was just restarted, the first picture search can take about a minute while its model loads.`,
+        )
+      }
+      throw error
+    }
   }
 }
 

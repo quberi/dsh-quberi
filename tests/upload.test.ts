@@ -837,6 +837,79 @@ describe('picture search', () => {
     expect(result.images[0].preview_url).toBeUndefined()
   })
 
+  it('waits longer for a picture search than for an ordinary request, because the first one loads a model', async () => {
+    const seen: number[] = []
+    const fake = fakeQuberi()
+    fake.imagesAnswer = () => ({ status: 200, body: body() })
+    const original = AbortSignal.timeout
+    AbortSignal.timeout = ((ms: number) => {
+      seen.push(ms)
+      return original.call(AbortSignal, ms)
+    }) as typeof AbortSignal.timeout
+    try {
+      const { controller } = make(fake)
+      await controller.searchImages({ query: 'x' })
+      await controller.listSpaces()
+    } finally {
+      AbortSignal.timeout = original
+    }
+    // make() uses a 1 s request timeout; picture search is raised to at least 90 s, the listing is not.
+    expect(seen.filter((ms) => ms >= 90_000)).toEqual([90_000])
+    expect(seen).toContain(1_000)
+  })
+
+  it('says in words that Quberi did not answer in time, instead of a generic failure', async () => {
+    const fake = fakeQuberi()
+    const hang = (input: string, init?: RequestInit): Promise<Response> =>
+      input.endsWith('/external/spaces')
+        ? new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation timed out', 'TimeoutError')))
+          })
+        : fake.fetch(input, init)
+    const controller = new QuberiController({
+      baseUrl: BASE,
+      clientId: 'quberi-harness',
+      scope: 'knowledge:read',
+      callbackPort: 0,
+      loginTimeoutMs: 1000,
+      requestTimeoutMs: 30,
+      refreshSkewMs: 0,
+      store: memoryStore(tokens({ scope: 'knowledge:read' })),
+      fetch: hang as typeof fetch,
+    } as ControllerOptions)
+    const error = await controller.listSpaces().then(() => undefined, (e: unknown) => e)
+    expect(error).toBeInstanceOf(QuberiUserError)
+    expect((error as Error).message).toMatch(/did not answer within 0 seconds|did not answer within \d+ seconds/u)
+    expect((error as Error).message).toMatch(/first picture search can take about a minute/u)
+  })
+
+  it('leaves a cancel by the user alone: it is not reported as a timeout', async () => {
+    const fake = fakeQuberi()
+    const hang = (input: string, init?: RequestInit): Promise<Response> =>
+      input.endsWith('/external/spaces')
+        ? new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')))
+          })
+        : fake.fetch(input, init)
+    const controller = new QuberiController({
+      baseUrl: BASE,
+      clientId: 'quberi-harness',
+      scope: 'knowledge:read',
+      callbackPort: 0,
+      loginTimeoutMs: 1000,
+      requestTimeoutMs: 60_000,
+      refreshSkewMs: 0,
+      store: memoryStore(tokens({ scope: 'knowledge:read' })),
+      fetch: hang as typeof fetch,
+    } as ControllerOptions)
+    const cancel = new AbortController()
+    const pending = controller.listSpaces(cancel.signal).then(() => undefined, (e: unknown) => e)
+    setTimeout(() => cancel.abort(), 20)
+    const error = await pending
+    expect(error).not.toBeInstanceOf(QuberiUserError)
+    expect((error as Error).name).toBe('AbortError')
+  })
+
   it('says what went wrong in plain words', async () => {
     const cases: Array<[number, unknown, RegExp]> = [
       [503, { detail: { code: 'image_search_disabled' } }, /turned off on this Quberi server/u],
