@@ -60,6 +60,11 @@ dsh plugin --profile desktop add /path/to/dsh-quberi-<version>.tgz
 | `/quberi logout` | Revokes the sign-in at Quberi and forgets it locally. |
 | `/quberi mode [text\|image\|both]` | Shows or sets where searches look: the documents' text, pictures, or both (the default). See Where a search looks. |
 
+The sign-in page says what Harness is asking to do (search, save notes, upload files) and
+what it cannot do, and lets you choose the organization (shown here in Chinese):
+
+![The Quberi sign-in page for DeepSeek Harness: permissions requested and the organization to use](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/11-harness-login.png)
+
 You can also disconnect any time in Quberi under **Account → Connected tools**.
 
 When sign-in finishes, the browser shows a confirmation page and Harness is
@@ -89,6 +94,11 @@ the model to offer to save and wait for you to agree, not to save silently, but
 that is an instruction to the model, not a guarantee: you decide by what you
 approve and by watching what the model does.
 
+Here the person asked Harness to save the conversation to their personal space. The model
+calls `quberi_save`, then says where the note went and when it becomes searchable:
+
+![Saving a conversation as a note in the personal space](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/10-harness-save-1.png)
+
 A saved note becomes a document in that space. **Anyone who can read that space
 can find it**, so name a shared space only on purpose. Saving is recorded in
 the audit log (the tool's name and the new document, not the text).
@@ -101,10 +111,24 @@ no document mentions it). The pictures are offered as possible matches, never as
 and only ones scoring above a floor are included. Without this, asking for a picture by
 its subject would have said "nothing found".
 
+In this example the question is "VMC-850 的设备铭牌和开机前检查" (the nameplate of a machine and
+its pre-start checks). The model searches, then answers from the operating procedure and
+shows the nameplate picture it found next to the text. The text documents say nothing about
+the nameplate itself; the picture does.
+
+![Asking Quberi from Harness: the search calls and the nameplate picture in the reply](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/08-harness-%E5%9B%BE%E6%96%87-1.png)
+
+![The rest of the reply: text from the operating procedure](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/08-harness-%E5%9B%BE%E6%96%87-2.png)
+
+![The end of the reply: the general pre-start checklist](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/08-harness-%E5%9B%BE%E6%96%87-3.png)
+
 - Say "only the documents" or "only pictures" and the model sets `kind` to `text` or `image`.
 - `/quberi mode text` or `/quberi mode image` fixes it for you, and overrides the model;
   `/quberi mode both` goes back to the default. In `text` mode the picture tool refuses.
   The choice lasts until Harness restarts; set the default with `searchMode` (below).
+
+  ![/quberi mode text, then /quberi mode both](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/07-mode.png)
+
 - `both` needs a Quberi server that supports it. An older server only searches text, and
   the plugin simply gets no pictures.
 - Looking for pictures runs Quberi's picture model, so it has its own rate limit. If that
@@ -140,7 +164,14 @@ cursor for the next page. Pass `type` (`image`, `pdf`, `word`, `spreadsheet`,
 `presentation`, `text` or `other`) to list only that kind of file; this needs a
 Quberi server that supports it (an older one ignores the filter).
 
-Both show file information only. They never return what is inside a document
+Asked "which spaces and documents do I have?", the model lists the spaces first and then
+each space's documents. Pictures are marked as searchable by picture, text files by content.
+
+![Listing the spaces the signed-in person can read, and the documents in the first shared space](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/09-harness-space-1.png)
+
+![The documents in the second shared space, including the picture](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/09-harness-space-2.png)
+
+Both listing tools show file information only. They never return what is inside a document
 (that is what search is for) and they do not say who uploaded it. They use the
 same read permission as search and the same live access rules, so a space or
 document you cannot see in Quberi is not listed. Each use is recorded in the
@@ -163,6 +194,16 @@ different: Harness itself shows it, with the file, its size and the destination.
 space, or to a named space you can edit. It exists so Harness can keep a PDF,
 a Word or Excel file, a slide deck, an image or a text file you point to,
 without you opening the Quberi web app.
+
+Harness asks before each file leaves the workspace, showing the file, its size and the
+destination:
+
+![Harness asking for approval to upload a Word file to the personal space](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/10-harness-save-2.png)
+
+Afterwards the model lists what is in the space. Files that are still being indexed are
+marked as not yet searchable; the saved note is already searchable:
+
+![The personal space after the upload: three files still indexing, one note searchable](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/10-harness-save-3.png)
 
 Because a model chooses the path, and a model can be steered by whatever text it
 read last, three separate checks stand between a path and the network:
