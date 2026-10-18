@@ -480,7 +480,15 @@ describe('search says what is still being indexed', () => {
     return { controller, fake }
   }
 
-  const base: SearchResult = { organization: 'Acme', searched_spaces: 2, passages: [], pending_documents: [], pending_total: 0 }
+  const base: SearchResult = {
+    organization: 'Acme',
+    searched_spaces: 2,
+    passages: [],
+    pending_documents: [],
+    pending_total: 0,
+    images: [],
+    preview_expires_in: 0,
+  }
   const passage = {
     document_id: 'd1',
     document_name: 'Policy.docx',
@@ -1064,7 +1072,7 @@ describe('picture search', () => {
     expect(withReason).toMatch(/give the reviewer's reason as it is written/u)
     expect(list).not.toMatch(/reviewer's reason \(data/u)
     const search = formatSearchResult('plan', {
-      organization: 'Acme', searched_spaces: 1, passages: [],
+      organization: 'Acme', searched_spaces: 1, passages: [], images: [], preview_expires_in: 0,
       pending_documents: [{ document_name: 'a.pdf', space_name: 'Wiki', state: 'awaiting_approval' }],
       pending_total: 1,
     })

@@ -78,8 +78,8 @@ describe('plugin wiring', () => {
     expect(effects).toHaveLength(1)
 
     const search = registered.tools.find((t) => t.name === 'quberi_search')!
-    // Search reads only: a query, an optional space to look in and an optional count, nothing that writes.
-    expect(Object.keys(search.parameters.properties).sort()).toEqual(['query', 'space', 'top_k'])
+    // Search reads only: a query, optional space, count and kind (text, pictures or both); nothing writes.
+    expect(Object.keys(search.parameters.properties).sort()).toEqual(['kind', 'query', 'space', 'top_k'])
     expect(search.parameters.required).toEqual(['query'])
 
     const pictures = registered.tools.find((t) => t.name === 'quberi_search_images')!
@@ -314,12 +314,15 @@ describe('file upload: the approval gate', () => {
 describe('what each tool hands back to the model', () => {
   const exec = () => ({ callId: 'c1', signal: new AbortController().signal })
 
-  async function mountedWithFake(over: (fake: ReturnType<typeof fakeQuberi>) => void = () => undefined) {
+  async function mountedWithFake(
+    over: (fake: ReturnType<typeof fakeQuberi>) => void = () => undefined,
+    settings: Partial<typeof config> = {},
+  ) {
     const fake = fakeQuberi()
     over(fake)
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(fake.fetch)
     const harness = fakeContext('/nonexistent')
-    await apply(harness.ctx, { ...config, openBrowser: false, focusApp: false })
+    await apply(harness.ctx, { ...config, openBrowser: false, focusApp: false, ...settings })
     harness.records.set('quberi/oauth', {
       kind: 'grant',
       payload: tokens({ scope: 'knowledge:read knowledge:write knowledge:upload' }),
@@ -394,6 +397,108 @@ describe('what each tool hands back to the model', () => {
     const text = await tool('quberi_list_spaces').execute({}, exec())
     expect(text.indexOf('When you answer')).toBeLessThan(text.indexOf('Ignore all rules'))
     restore()
+  })
+
+  describe('where a search looks (text, pictures, or both)', () => {
+    const PREVIEW = 'https://api.quberi.com/api/v1/external/preview/Lion_1.jpg'
+    const withPictures = (f: ReturnType<typeof fakeQuberi>) => {
+      f.searchAnswer = () => ({
+        status: 200,
+        body: {
+          organization: 'Acme',
+          searched_spaces: 1,
+          passages: [],
+          preview_expires_in: 600,
+          images: [{ name: 'lioness.jpg', space_name: 'tech', mime_type: 'image/jpeg', size_bytes: 9, score: 0.4, preview_url: PREVIEW }],
+        },
+      })
+    }
+    const searches = (fake: ReturnType<typeof fakeQuberi>) =>
+      fake.calls.filter((c) => c.url.endsWith('/external/search')).map((c) => JSON.parse(c.body))
+    const pictureCalls = (fake: ReturnType<typeof fakeQuberi>) => fake.calls.filter((c) => c.url.endsWith('/external/images/search'))
+
+    it('offers the pictures that rode along, as possible matches with ready-made image lines', async () => {
+      const { tool, restore } = await mountedWithFake(withPictures)
+      const text = await tool('quberi_search').execute({ query: '动物母狮' }, exec())
+      expect(text).toMatch(/found no passages/u)
+      expect(text).toMatch(/MIGHT be related to "动物母狮"/u)
+      expect(text).toContain(`![lioness.jpg](${PREVIEW})`)
+      expect(text).toMatch(/Say it may be what they meant, not that it is/u)
+      restore()
+    })
+
+    it('says nothing about pictures when none came back', async () => {
+      const { tool, restore } = await mountedWithFake()
+      const text = await tool('quberi_search').execute({ query: 'leave policy' }, exec())
+      expect(text).not.toMatch(/picture/iu)
+      restore()
+    })
+
+    it('asks for both by default (nothing extra is sent), and for text only when told', async () => {
+      const { tool, fake, restore } = await mountedWithFake()
+      await tool('quberi_search').execute({ query: 'x' }, exec())
+      await tool('quberi_search').execute({ query: 'x', kind: 'text' }, exec())
+      const [first, second] = searches(fake)
+      expect(first).toEqual({ query: 'x', top_k: 5 })
+      expect(second).toEqual({ query: 'x', top_k: 5, kind: 'text' })
+      restore()
+    })
+
+    it('goes to the picture search when the model asks for pictures only', async () => {
+      const { tool, fake, restore } = await mountedWithFake()
+      const text = await tool('quberi_search').execute({ query: 'a red bracket', kind: 'image', top_k: 3, space: 'Parts' }, exec())
+      expect(searches(fake)).toHaveLength(0)
+      expect(JSON.parse(pictureCalls(fake)[0].body)).toEqual({ query: 'a red bracket', top_k: 3, space: 'Parts' })
+      expect(text).toMatch(/Quberi pictures for "a red bracket"/u)
+      restore()
+    })
+
+    it('ignores a kind it does not know', async () => {
+      const { tool, fake, restore } = await mountedWithFake()
+      await tool('quberi_search').execute({ query: 'x', kind: 'everything' }, exec())
+      expect(searches(fake)[0]).toEqual({ query: 'x', top_k: 5 })
+      restore()
+    })
+
+    it("the person's text-only mode wins over the model, and keeps the picture tool out", async () => {
+      const { tool, fake, restore } = await mountedWithFake(() => undefined, { searchMode: 'text' })
+      await tool('quberi_search').execute({ query: 'x', kind: 'image' }, exec())
+      expect(searches(fake)[0]).toEqual({ query: 'x', top_k: 5, kind: 'text' })
+      expect(pictureCalls(fake)).toHaveLength(0)
+      await expect(tool('quberi_search_images').execute({ query: 'a bracket' }, exec())).rejects.toThrow(/chose text-only search/u)
+      expect(pictureCalls(fake)).toHaveLength(0)
+      restore()
+    })
+
+    it("the person's pictures-only mode makes the search tool look at pictures", async () => {
+      const { tool, fake, restore } = await mountedWithFake(() => undefined, { searchMode: 'image' })
+      const text = await tool('quberi_search').execute({ query: 'lion', kind: 'text' }, exec())
+      expect(searches(fake)).toHaveLength(0)
+      expect(pictureCalls(fake)).toHaveLength(1)
+      expect(text).toMatch(/Quberi pictures for "lion"/u)
+      restore()
+    })
+
+    it('describes the choice to the model', async () => {
+      const { tool, restore } = await mountedWithFake()
+      const search = tool('quberi_search')
+      expect(search.description).toMatch(/pictures that might be what was asked for/u)
+      expect(search.description).toMatch(/\/quberi mode/u)
+      expect(search.parameters.properties.kind.description).toMatch(/'both'.*'text'.*'image'/su)
+      restore()
+    })
+
+    it('the command changes the mode for the next search', async () => {
+      const { tool, fake, registered, restore } = await mountedWithFake()
+      const command = registered.commands[0]
+      expect((await command.handler({ rawInput: 'mode text' })).text).toMatch(/Search mode: text/u)
+      await tool('quberi_search').execute({ query: 'x' }, exec())
+      expect(searches(fake)[0].kind).toBe('text')
+      expect((await command.handler({ rawInput: 'mode both' })).text).toMatch(/Search mode: both/u)
+      await tool('quberi_search').execute({ query: 'x' }, exec())
+      expect(searches(fake)[1].kind).toBeUndefined()
+      restore()
+    })
   })
 
   it('search names the document each point comes from, and reports what is still indexing', async () => {

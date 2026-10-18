@@ -23,14 +23,16 @@ import { focusHostApp, openInBrowser } from './browser.js'
 import {
   QuberiController,
   QuberiUserError,
+  SEARCH_KINDS,
   formatDocumentsResult,
   formatImageSearchResult,
   formatSaveResult,
   formatSearchResult,
   formatSpacesResult,
   formatUploadResult,
+  resolveKind,
 } from './controller.js'
-import type { TokenStore } from './controller.js'
+import type { SearchKind, TokenStore } from './controller.js'
 import { readTokenSet } from './oauth.js'
 import type { TokenSet } from './oauth.js'
 import { UploadGate, UploadRefusal, readApproved } from './upload.js'
@@ -88,6 +90,11 @@ export interface Config {
    * Off: the tool is not registered and sign-in does not ask for the upload permission.
    */
   uploadFiles: boolean
+  /**
+   * Where searches look until you change it with `/quberi mode`: `both` (the documents' text, and
+   * pictures that might be related), `text` (documents only) or `image` (pictures only).
+   */
+  searchMode: SearchKind
 }
 
 export const Config: z<Config> = z.object({
@@ -101,6 +108,7 @@ export const Config: z<Config> = z.object({
   autoLogin: z.boolean().default(true),
   focusApp: z.boolean().default(true),
   uploadFiles: z.boolean().default(true),
+  searchMode: z.union(SEARCH_KINDS.map((kind) => z.const(kind)) as [z<SearchKind>, ...z<SearchKind>[]]).default('both'),
 })
 
 /** The folder the calling agent's session works in, or undefined if it cannot be told. */
@@ -152,14 +160,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     openBrowser: config.openBrowser ? (url) => openInBrowser(url) : undefined,
     focusApp: config.focusApp ? () => focusHostApp() : undefined,
     autoLogin: config.autoLogin,
+    searchMode: config.searchMode,
     warn: (message) => ctx.logger.warn(message),
   })
   ctx.effect(() => () => controller.dispose(), 'quberi.lifecycle')
 
   ctx.commands.register({
     name: 'quberi',
-    description: 'sign in to Quberi (search, browse, save and upload knowledge) or check the connection',
-    input: { hint: '[login|status|logout]' },
+    description:
+      'sign in to Quberi (search, browse, save and upload knowledge), check the connection, or choose where searches look (mode)',
+    input: { hint: '[login|status|logout|mode]' },
     handler: (invocation) => controller.command(invocation.rawInput),
   })
 
@@ -168,14 +178,23 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       name: 'quberi_search',
       description:
         "Search the user's Quberi knowledge base: the company or team documents they are allowed to read " +
-        '(handbooks, policies, notes). Returns matching passages with the document name and space. ' +
+        '(handbooks, policies, notes). Returns matching passages with the document name and space, and, beside them, ' +
+        'any pictures that might be what was asked for (a text search alone cannot see pictures). ' +
         'Read-only. The first time, it opens a browser window for the user to sign in to Quberi; ' +
-        'if it says the user must open a link, pass that link on.',
+        'if it says the user must open a link, pass that link on. ' +
+        'If the user wants only documents or only pictures, set `kind`; the user can also fix this with /quberi mode, ' +
+        'and a choice made there overrides `kind`.',
       parameters: {
         query: {
           type: 'string',
           required: true,
           description: 'What to look for, phrased as a question or key phrase.',
+        },
+        kind: {
+          type: 'string',
+          description:
+            "Where to look: 'both' (default: document text, plus pictures that might be related), " +
+            "'text' (documents only) or 'image' (pictures only).",
         },
         space: {
           type: 'string',
@@ -189,12 +208,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       },
       output: textOutput,
       execute: (args, exec) =>
-        guarded(exec.signal, async () =>
-          formatSearchResult(
+        guarded(exec.signal, async () => {
+          const requested = SEARCH_KINDS.find((kind) => kind === args.kind)
+          const kind = resolveKind(controller.searchMode, requested)
+          if (kind === 'image') {
+            // Pictures only: the picture search, with its own limits and wording.
+            return formatImageSearchResult(
+              args.query,
+              await controller.searchImages({ query: args.query, space: args.space, top_k: args.top_k }, exec.signal),
+            )
+          }
+          return formatSearchResult(
             args.query,
-            await controller.search(args.query, args.top_k ?? 5, exec.signal, args.space),
-          ),
-        ),
+            await controller.search(args.query, args.top_k ?? 5, exec.signal, args.space, kind),
+          )
+        }),
     }),
   )
 
@@ -224,12 +252,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       },
       output: textOutput,
       execute: (args, exec) =>
-        guarded(exec.signal, async () =>
-          formatImageSearchResult(
+        guarded(exec.signal, async () => {
+          if (controller.searchMode === 'text') {
+            throw new QuberiUserError(
+              'The user chose text-only search (/quberi mode text), so pictures are not searched. ' +
+                'Use quberi_search for documents, or tell the user to run /quberi mode both if they want pictures.',
+            )
+          }
+          return formatImageSearchResult(
             args.query,
             await controller.searchImages({ query: args.query, space: args.space, top_k: args.top_k }, exec.signal),
-          ),
-        ),
+          )
+        }),
     }),
   )
   ctx.tools.register(

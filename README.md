@@ -58,6 +58,7 @@ dsh plugin --profile desktop add /path/to/dsh-quberi-<version>.tgz
 | `/quberi login` | Opens your browser to sign in to Quberi (the link is also shown in case it does not open). Choose an organization and allow. You rarely need this: the first search does it for you. If you signed in with an older version, run it again to allow saving or uploading. |
 | `/quberi status` | Shows whether you are connected. Never prints a token. |
 | `/quberi logout` | Revokes the sign-in at Quberi and forgets it locally. |
+| `/quberi mode [text\|image\|both]` | Shows or sets where searches look: the documents' text, pictures, or both (the default). See Where a search looks. |
 
 You can also disconnect any time in Quberi under **Account → Connected tools**.
 
@@ -91,6 +92,23 @@ approve and by watching what the model does.
 A saved note becomes a document in that space. **Anyone who can read that space
 can find it**, so name a shared space only on purpose. Saving is recorded in
 the audit log (the tool's name and the new document, not the text).
+
+## Where a search looks
+A text search cannot see pictures, so by default `quberi_search` looks in both: it
+returns the matching passages and, beside them, a few pictures that **might** be what
+you asked for (for example, asking about "动物母狮" shows the lioness picture even though
+no document mentions it). The pictures are offered as possible matches, never as the answer,
+and only ones scoring above a floor are included. Without this, asking for a picture by
+its subject would have said "nothing found".
+
+- Say "only the documents" or "only pictures" and the model sets `kind` to `text` or `image`.
+- `/quberi mode text` or `/quberi mode image` fixes it for you, and overrides the model;
+  `/quberi mode both` goes back to the default. In `text` mode the picture tool refuses.
+  The choice lasts until Harness restarts; set the default with `searchMode` (below).
+- `both` needs a Quberi server that supports it. An older server only searches text, and
+  the plugin simply gets no pictures.
+- Looking for pictures runs Quberi's picture model, so it has its own rate limit. If that
+  is reached, or picture search is off, the text results still come back.
 
 ## Finding pictures
 `quberi_search_images` finds pictures from a description ("a red bracket with two
@@ -202,7 +220,8 @@ Defaults are right for the hosted service. For a self-hosted Quberi, point
 `baseUrl` at your API (https, or `http://127.0.0.1:<port>` for development).
 `openBrowser`, `autoLogin` and `focusApp` (all on by default) switch off the
 automatic browser, sign-in on first use, and returning to Harness. `uploadFiles`
-(on by default) offers the upload tool; off removes it:
+(on by default) offers the upload tool; off removes it. `searchMode` (`both` by default,
+or `text` or `image`) is where searches look until you change it with `/quberi mode`:
 
 ```yaml
 - insert:
@@ -214,6 +233,7 @@ automatic browser, sign-in on first use, and returning to Harness. `uploadFiles`
         # autoLogin: false
         # focusApp: false
         # uploadFiles: false
+        # searchMode: text
 ```
 
 ## Compatibility

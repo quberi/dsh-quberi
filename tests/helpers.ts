@@ -31,7 +31,7 @@ export interface FakeQuberi {
   calls: Array<{ url: string; method: string; headers: Record<string, string>; body: string }>
   /** What the next token request answers; default: success. */
   tokenAnswer?: (form: URLSearchParams) => { status: number; body: unknown }
-  searchAnswer?: (auth: string) => { status: number; body: unknown }
+  searchAnswer?: (auth: string, body: string) => { status: number; body: unknown }
   saveAnswer?: (auth: string, body: string) => { status: number; body: unknown }
   uploadAnswer?: (auth: string, form: FormData) => { status: number; body: unknown }
   spacesAnswer?: (auth: string) => { status: number; body: unknown }
@@ -98,7 +98,7 @@ export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = 
       if (url.endsWith('/api/v1/external/search')) {
         const auth = headers.Authorization ?? ''
         if (fake.searchAnswer) {
-          const answer = fake.searchAnswer(auth)
+          const answer = fake.searchAnswer(auth, body)
           return json(answer.status, answer.body)
         }
         return json(200, {
