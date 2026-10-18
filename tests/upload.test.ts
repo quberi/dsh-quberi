@@ -8,6 +8,7 @@ import {
   QuberiUserError,
   formatDocumentsResult,
   formatImageSearchResult,
+  formatSaveResult,
   formatSearchResult,
   formatSpacesResult,
   formatUploadResult,
@@ -1000,6 +1001,46 @@ describe('picture search', () => {
       expect(ok).not.toMatch(/No picture clearly matches/u)
       expect(ok.startsWith('Quberi pictures for "螺丝"')).toBe(true)
     }
+  })
+  it('tells the user a file is waiting for approval, not still indexing', () => {
+    const upload = formatUploadResult({
+      document_id: 'd', space_id: 's', space_name: 'Wiki', name: 'plan.pdf', mime_type: 'application/pdf',
+      size_bytes: 10, review_state: 'pending',
+    })
+    expect(upload).toMatch(/WAITING FOR APPROVAL/u)
+    expect(upload).toMatch(/not being indexed now/u)
+    expect(upload).toMatch(/awaiting approval \(not still indexing\)/u)
+    expect(upload).not.toMatch(/takes about a minute/u)
+    // An ordinary upload is described as before.
+    const normal = formatUploadResult({
+      document_id: 'd', space_id: 's', space_name: 'Wiki', name: 'plan.pdf', mime_type: 'application/pdf',
+      size_bytes: 10, review_state: 'approved',
+    })
+    expect(normal).toMatch(/takes about a minute/u)
+    expect(normal).not.toMatch(/APPROVAL/u)
+
+    const note = formatSaveResult({ document_id: 'd', space_id: 's', space_name: 'Wiki', name: 'idea', review_state: 'pending' })
+    expect(note).toMatch(/WAITING FOR APPROVAL/u)
+    expect(formatSaveResult({ document_id: 'd', space_id: 's', space_name: 'Wiki', name: 'idea' })).toMatch(/can now be found/u)
+  })
+  it('lists a waiting file with its real status, and a search names it as awaiting approval', () => {
+    const list = formatDocumentsResult({
+      space_name: 'Wiki', total: 2, next_cursor: undefined,
+      documents: [
+        { name: 'a.pdf', mime_type: 'application/pdf', size_bytes: 1, updated_at: '2026-01-01T00:00:00Z', status: 'awaiting_approval' },
+        { name: 'b.pdf', mime_type: 'application/pdf', size_bytes: 1, updated_at: '2026-01-01T00:00:00Z', status: 'rejected' },
+      ],
+    })
+    expect(list).toMatch(/"a.pdf" - .*waiting for approval by the space owner or an admin/u)
+    expect(list).toMatch(/"b.pdf" - .*rejected by the space owner or an admin/u)
+    const search = formatSearchResult('plan', {
+      organization: 'Acme', searched_spaces: 1, passages: [],
+      pending_documents: [{ document_name: 'a.pdf', space_name: 'Wiki', state: 'awaiting_approval' }],
+      pending_total: 1,
+    })
+    expect(search).toMatch(/waiting for approval by the space owner or an admin: "a.pdf"/u)
+    expect(search).toMatch(/not still indexing/u)
+    expect(search).not.toMatch(/still being indexed:/u)
   })
   it('says so when nothing is found, and when no space can be read', () => {
     const empty = { organization: 'Acme', preview_expires_in: 600, images: [] }
