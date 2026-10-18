@@ -974,6 +974,33 @@ describe('picture search', () => {
     }
   })
 
+  it('leads with "no picture clearly matches" when even the best one is weak', () => {
+    const image = (name: string, score: number) => ({
+      name, space_name: 'Parts', mime_type: 'image/png', size_bytes: 1, score,
+      preview_url: `${BASE}/api/v1/external/preview/k.jpg`,
+    })
+    const weak = formatImageSearchResult('螺丝', {
+      organization: 'Acme', searched_spaces: 1, preview_expires_in: 600,
+      images: [image('学卷.png', 0.07), image('柱状图.png', 0.06), image('风景.png', 0.04)],
+    })
+    expect(weak.split('\n')[0]).toBe(
+      'No picture clearly matches "螺丝". These are only the nearest ones and the best closeness is 0.07, which is weak.',
+    )
+    expect(weak).toMatch(/Tell the user plainly that no matching picture was found/u)
+    expect(weak).toMatch(/do not put their image lines in your answer unless the user asks/u)
+    // The pictures are still listed, for a user who asks to see the nearest anyway.
+    expect(weak).toContain('1. "学卷.png" (space: Parts), closeness 0.07')
+
+    // Anything at or above the line is an ordinary result, with no such warning.
+    for (const best of [0.1, 0.32]) {
+      const ok = formatImageSearchResult('螺丝', {
+        organization: 'Acme', searched_spaces: 1, preview_expires_in: 600,
+        images: [image('a.png', best), image('b.png', 0.01)],
+      })
+      expect(ok).not.toMatch(/No picture clearly matches/u)
+      expect(ok.startsWith('Quberi pictures for "螺丝"')).toBe(true)
+    }
+  })
   it('says so when nothing is found, and when no space can be read', () => {
     const empty = { organization: 'Acme', preview_expires_in: 600, images: [] }
     expect(formatImageSearchResult('red gear', { ...empty, searched_spaces: 2 })).toMatch(/found no pictures for "red gear"/u)
