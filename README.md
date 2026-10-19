@@ -233,6 +233,22 @@ what it shows, so `quberi_search_images` can find it from a description (when
 your Quberi server has picture search); `quberi_search` itself returns text
 passages only.
 
+A space owner can ask that uploads be approved first. In such a space, a file uploaded by
+someone who is not an owner or admin of the space waits as pending: it is not indexed, so
+search cannot find it or quote it, and only the uploader and the space's reviewers can see
+it. The upload tool reports it as waiting for approval instead of as done. An owner or admin
+then approves it, which queues it for indexing, or rejects it with a reason. Owners and
+admins upload straight in. Here four files are uploaded to a space that asks for approval:
+
+![Uploading to a space that asks for approval: the first file is submitted and waits](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/12b-%E4%B8%8A%E4%BC%A0%E8%80%85%E8%A7%86%E8%A7%92-1.png)
+
+![All four files are in the space, each marked as waiting for approval](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/12c-%E5%BE%85%E5%AE%A1%E6%89%B9%E5%88%97%E8%A1%A8.png)
+
+After the reviewer has decided, asking the model for the files' state shows the outcome: two
+approved and searchable, two rejected.
+
+![After review: two files approved, two rejected](https://raw.githubusercontent.com/quberi/dsh-quberi/main/docs/images/12e-%E6%9F%A5%E8%AF%A2%E5%AE%A1%E6%89%B9%E7%BB%93%E6%9E%9C.png)
+
 Anyone who can read the destination space can find the file. Uploading is a
 separate permission (`knowledge:upload`), recorded in the audit log as the
 document and its size and type, never the contents. To turn the tool off, and
