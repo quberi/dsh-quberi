@@ -1,7 +1,22 @@
 # dsh-quberi
 
-Search, browse, save notes and upload files to your [Quberi](https://ai.quberi.com)
-knowledge base from DeepSeek Harness.
+Query your [Quberi](https://ai.quberi.com) knowledge base from DeepSeek Harness:
+search, browse, save notes and upload files.
+
+The interesting part isn't the search — it's what search is allowed to return.
+Quberi enforces permissions **per document**, not per space: two people asking
+the same question in the same space can get different answers, because the
+retrieval filter runs inside the vector index and a denied document is never a
+candidate in the first place.
+
+- Per-document access rules with **deny wins** — a grant cannot override a
+  decision to hide one document.
+- **Filtered at retrieval time**, so you get a full result set, not a shorter
+  one with holes.
+- **Revoked picture links die** — a picture preview URL issued before access was
+  removed returns 404 on the next request.
+- Writes go only into spaces you can edit; uploads require your confirmation
+  each time.
 
 Ask Harness a question about your documents. The first time, your browser
 opens by itself so you can approve access; after that the model can call
@@ -15,12 +30,10 @@ and uploading in 0.4.0; each needs a fresh sign-in that includes it. Browsing an
 picture search need nothing beyond search. An
 upload only happens after **you approve that file** (see Uploading files).
 
-**Permissions in Quberi are per-document, not per-space.** The plugin searches
-and lists with your own Quberi account, so it sees exactly the documents you can
-read. A document someone shared with you individually is found even if you
-cannot read its space, and a document hidden from you is not found even if you
-can read its space. Quberi checks these rules on every request, so a change
-applies to your next search.
+Each scope is granted on its own: search needs `knowledge:read`, saving needs
+`knowledge:write` and uploading needs `knowledge:upload`. A document someone
+shared with you individually is found even if you cannot read its space, and a
+document hidden from you is not found even if you can read its space.
 
 ## Install
 
@@ -143,7 +156,7 @@ the nameplate itself; the picture does.
 
 ## Finding pictures
 `quberi_search_images` finds pictures from a description ("a red bracket with two
-holes") in the spaces you can read, closest first, optionally in one named space.
+holes") in the documents you can read, closest first, optionally in one named space.
 Harness cannot show a picture a tool returns, but it does show a Markdown image
 in the model's reply, so each result carries a link to a small preview (a JPEG of
 at most 320 px) and the model is asked to paste it into its answer exactly as
