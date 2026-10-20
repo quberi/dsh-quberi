@@ -15,6 +15,13 @@ and uploading in 0.4.0; each needs a fresh sign-in that includes it. Browsing an
 picture search need nothing beyond search. An
 upload only happens after **you approve that file** (see Uploading files).
 
+**Permissions in Quberi are per-document, not per-space.** The plugin searches
+and lists with your own Quberi account, so it sees exactly the documents you can
+read. A document someone shared with you individually is found even if you
+cannot read its space, and a document hidden from you is not found even if you
+can read its space. Quberi checks these rules on every request, so a change
+applies to your next search.
+
 ## Install
 
 In DeepSeek Harness open **Plugins → Add plugin** and enter:
