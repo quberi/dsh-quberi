@@ -106,6 +106,14 @@ uses. Quberi's "check before sending" step does not apply to this path. Every
 search is recorded in the organization's audit log (the tool's name and the
 documents returned, never the question or the text).
 
+`quberi_read_around` sends more of a document than the search does: up to 3000 characters on
+either side of a passage, only when the model asks for it, and only from documents you can open
+in Quberi. Each call is recorded in the audit log (the document, the version and how many
+characters, never the text) and is rate limited. A page image is fetched by Harness from a
+short-lived link on your Quberi address; the link names one page for you and stops working when
+you sign out of the tool, lose access to the document or after about ten minutes. An organization
+owner can turn outside tools off, which ends all of this at once.
+
 ## Saving notes
 
 `quberi_save` takes a title, the note text (Markdown) and, optionally, the name
@@ -131,6 +139,22 @@ the heading and paragraph of a Word file, or the lines of a text file. The versi
 than one (`version 1 (older, replaced by version 2)`). A passage read from a scan, or a model's description of a
 picture, is marked as such, because it can contain mistakes. Nothing is shown for a passage the server gave no place
 for, and an older server leaves the results exactly as before.
+
+## Seeing the page, and reading around a passage
+
+Two more things come with a search result, when your Quberi server supports them.
+
+**The page.** A passage from a PDF (and text read out of a picture) comes with a link to an image of the
+page it was found on. The result gives the model a ready-made `![...](...)` line and tells it to show the
+page only when you ask to see the original. Slides, spreadsheets and Word files have no page that can be
+drawn, so they carry no image; their place (slide, sheet and row, paragraph) is still named. Harness only
+passes on a link that is on your Quberi address and in the page path; any other link is dropped.
+
+**The text around it.** `quberi_read_around` returns the text before and after a passage, from the same
+file and version, so the model can read it in context without you opening the file. The search result
+gives the model the exact values to pass (`document_id`, `version`, `char_start`, `char_end`), and the
+model is told to ask only when you want more context or a passage looks cut off. It does not work for
+text read from a scan or a picture, which has no text layer to read around, and it says so.
 
 ## Where a search looks
 A text search cannot see pictures, so by default `quberi_search` looks in both: it

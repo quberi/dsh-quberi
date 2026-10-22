@@ -26,6 +26,7 @@ import {
   SEARCH_KINDS,
   formatDocumentsResult,
   formatImageSearchResult,
+  formatReadAroundResult,
   formatSaveResult,
   formatSearchResult,
   formatSpacesResult,
@@ -226,6 +227,62 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }),
   )
 
+  ctx.tools.register(
+    defineTool({
+      name: 'quberi_read_around',
+      description:
+        'Read the text on either side of a passage that quberi_search returned, from the same file and version, to see what ' +
+        'comes before and after it. Pass document_id, version, char_start and char_end exactly as the search result gave them ' +
+        'in the parentheses under the passage. Not available for text read from a scan or a picture. Read-only. ' +
+        'Use it when the user wants more context, or a passage seems cut off; not for every passage.',
+      parameters: {
+        document_id: {
+          type: 'string',
+          required: true,
+          description: 'The document_id from the passage, unchanged.',
+        },
+        version: {
+          type: 'number',
+          description: 'The version from the passage, unchanged. Omit to read the current version.',
+        },
+        char_start: {
+          type: 'number',
+          required: true,
+          description: 'The char_start from the passage, unchanged.',
+        },
+        char_end: {
+          type: 'number',
+          required: true,
+          description: 'The char_end from the passage, unchanged.',
+        },
+        before: {
+          type: 'number',
+          description: 'Characters to return before the passage, 0 to 3000 (default 1500).',
+        },
+        after: {
+          type: 'number',
+          description: 'Characters to return after the passage, 0 to 3000 (default 1500).',
+        },
+      },
+      output: textOutput,
+      execute: (args, exec) =>
+        guarded(exec.signal, async () =>
+          formatReadAroundResult(
+            await controller.readAround(
+              {
+                document_id: args.document_id,
+                version: args.version,
+                char_start: args.char_start,
+                char_end: args.char_end,
+                before: args.before,
+                after: args.after,
+              },
+              exec.signal,
+            ),
+          ),
+        ),
+    }),
+  )
   ctx.tools.register(
     defineTool({
       name: 'quberi_search_images',

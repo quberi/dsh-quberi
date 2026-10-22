@@ -37,6 +37,7 @@ export interface FakeQuberi {
   spacesAnswer?: (auth: string) => { status: number; body: unknown }
   documentsAnswer?: (auth: string, query: URLSearchParams) => { status: number; body: unknown }
   imagesAnswer?: (auth: string, body: string) => { status: number; body: unknown }
+  readAroundAnswer?: (auth: string, body: string) => { status: number; body: unknown }
   /** The multipart bodies the fake received, in order. */
   uploads: FormData[]
   /** Scope stamped on tokens the fake issues; default read + write. */
@@ -115,6 +116,27 @@ export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = 
               score: 0.9,
             },
           ],
+        })
+      }
+      if (url.endsWith('/api/v1/external/read-around')) {
+        const auth = headers.Authorization ?? ''
+        if (fake.readAroundAnswer) {
+          const answer = fake.readAroundAnswer(auth, body)
+          return json(answer.status, answer.body)
+        }
+        return json(200, {
+          document_id: 'a6f1c2d4-1111-4222-8333-444455556666',
+          document_name: 'Handbook.md',
+          space_name: 'HR',
+          version_number: 1,
+          latest_version: 1,
+          before: 'Earlier text.',
+          passage: 'Remote work is allowed.',
+          after: 'Later text.',
+          window_start: 10,
+          window_end: 60,
+          text_length: 900,
+          passage_truncated: false,
         })
       }
       if (url.endsWith('/api/v1/external/images/search')) {

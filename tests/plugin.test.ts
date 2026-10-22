@@ -69,6 +69,7 @@ describe('plugin wiring', () => {
     expect(registered.commands.map((c) => c.name)).toEqual(['quberi'])
     expect(registered.tools.map((t) => t.name)).toEqual([
       'quberi_search',
+      'quberi_read_around',
       'quberi_search_images',
       'quberi_save',
       'quberi_list_spaces',
@@ -301,6 +302,7 @@ describe('file upload: the approval gate', () => {
     const { registered, listener } = await mounted(workspace(), { uploadFiles: false })
     expect(registered.tools.map((t) => t.name)).toEqual([
       'quberi_search',
+      'quberi_read_around',
       'quberi_search_images',
       'quberi_save',
       'quberi_list_spaces',
@@ -333,7 +335,7 @@ describe('what each tool hands back to the model', () => {
 
   it('is plain text: Harness shows these tools as generic rows, so the model writes the answer', async () => {
     const { tool, restore } = await mountedWithFake()
-    for (const name of ['quberi_search', 'quberi_search_images', 'quberi_save', 'quberi_list_spaces', 'quberi_list_documents', 'quberi_upload_file']) {
+    for (const name of ['quberi_search', 'quberi_read_around', 'quberi_search_images', 'quberi_save', 'quberi_list_spaces', 'quberi_list_documents', 'quberi_upload_file']) {
       const def = tool(name)
       expect(def.output.schema).toEqual({ type: 'string' })
       expect(def.output.render({}, 'hello')).toEqual([{ type: 'text', text: 'hello' }])
