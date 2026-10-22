@@ -123,6 +123,15 @@ A saved note becomes a document in that space. **Anyone who can read that space
 can find it**, so name a shared space only on purpose. Saving is recorded in
 the audit log (the tool's name and the new document, not the text).
 
+## Where in the file a passage is
+
+When your Quberi server records it, each passage comes with its place, so the answer can say where to look in the
+original: the page of a PDF (`page 3`, `pages 3-4`), the slide of a presentation, the sheet and row of a spreadsheet,
+the heading and paragraph of a Word file, or the lines of a text file. The version is shown when the file has more
+than one (`version 1 (older, replaced by version 2)`). A passage read from a scan, or a model's description of a
+picture, is marked as such, because it can contain mistakes. Nothing is shown for a passage the server gave no place
+for, and an older server leaves the results exactly as before.
+
 ## Where a search looks
 A text search cannot see pictures, so by default `quberi_search` looks in both: it
 returns the matching passages and, beside them, a few pictures that **might** be what
