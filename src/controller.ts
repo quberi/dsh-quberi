@@ -149,6 +149,12 @@ export interface Passage {
    * read from. Only a link on Quberi's own address, in the page path, is kept; see `trustedPageUrl`.
    */
   page_preview_url?: string
+  /**
+   * Where this passage is from, ready to put after a point it supports (`handbook.pdf, page 3,
+   * version 2 (latest)`). Made by the server from the same place words as the rest; kept to one
+   * short line. Absent on a server from before it existed.
+   */
+  citation?: string
 }
 
 /** The text on either side of a passage, as `quberi_read_around` returns it. */
@@ -1071,6 +1077,8 @@ export class QuberiController {
       char_start: count(raw.char_start),
       char_end: count(raw.char_end),
       page_preview_url: this.trustedPageUrl(raw.page_preview_url),
+      // One short line of text from the server that reaches the model, like a document name.
+      citation: cleanName(raw.citation, 400) || undefined,
     }
   }
 
@@ -1874,6 +1882,11 @@ export function formatSearchResult(query: string, result: SearchResult): string 
       (result.passages.some((p) => p.unit_label === 'ocr_block' || p.source_kind === 'image_ocr' || p.source_kind === 'image_caption')
         ? ' A passage marked as recognised from a scan may contain misread characters, and one described by a model is a guide to ' +
           'what a picture shows, not a transcript: say so when you rely on either.'
+        : '') +
+      // Only when the server gave a citation, so a result from an older server reads as it always has.
+      (result.passages.some((p) => p.citation !== undefined)
+        ? ' End each point you take from a passage with that passage\'s "Cite as" line, copied as given. ' +
+          'Never state a page, line, slide, row or version that is not given there.'
         : ''),
     '',
   ]
@@ -1882,6 +1895,7 @@ export function formatSearchResult(query: string, result: SearchResult): string 
     const note = passageNote(p)
     lines.push(`[${i + 1}] ${where}${note ? `, ${note}` : ''}, relevance ${p.score.toFixed(2)}`)
     lines.push(p.text.trim())
+    if (p.citation !== undefined) lines.push(`Cite as: ${p.citation}`)
     const hint = readHint(p)
     if (hint) lines.push(hint)
     const image = pageImageLine(p)

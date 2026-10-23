@@ -140,6 +140,13 @@ than one (`version 1 (older, replaced by version 2)`). A passage read from a sca
 picture, is marked as such, because it can contain mistakes. Nothing is shown for a passage the server gave no place
 for, and an older server leaves the results exactly as before.
 
+## Citing a passage
+
+When your Quberi server sends it, each passage comes with a `Cite as:` line (for example
+`handbook.pdf, page 3, version 2 (latest)`), and the model is asked to end each point it takes from a passage
+with that line, copied as given, and never to state a page or version the line does not give. This is a request
+to the model, not something Harness can enforce. A passage with no recorded place is cited by its document alone.
+
 ## Seeing the page, and reading around a passage
 
 Two more things come with a search result, when your Quberi server supports them.

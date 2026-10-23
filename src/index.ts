@@ -179,12 +179,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       name: 'quberi_search',
       description:
         "Search the user's Quberi knowledge base: the company or team documents they are allowed to read " +
-        '(handbooks, policies, notes). Returns matching passages with the document name and space, and, beside them, ' +
+        '(handbooks, policies, notes). Returns matching passages with the document name and space, where each is in the file ' +
+        '(page, slide, sheet row, paragraph or line) and its version, a "Cite as" line for each, and, beside them, ' +
         'any pictures that might be what was asked for (a text search alone cannot see pictures). ' +
         'Read-only. The first time, it opens a browser window for the user to sign in to Quberi; ' +
         'if it says the user must open a link, pass that link on. ' +
         'If the user wants only documents or only pictures, set `kind`; the user can also fix this with /quberi mode, ' +
-        'and a choice made there overrides `kind`.',
+        'and a choice made there overrides `kind`. ' +
+        'When you answer from the results, end each point with that passage\'s "Cite as" line, copied as given, ' +
+        'and never state a place or version it does not give.',
       parameters: {
         query: {
           type: 'string',
