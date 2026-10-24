@@ -4,6 +4,8 @@ import type { TokenStore } from '../src/controller.js'
 import type { TokenSet } from '../src/oauth.js'
 
 export const BASE = 'https://api.quberi.com'
+/** Where the hosted service signs people in (its discovery document names this as the issuer). */
+export const AUTH = 'https://ai.quberi.com'
 
 /** An in-memory token store with the same serialized read-modify-write contract. */
 export function memoryStore(initial?: TokenSet): TokenStore & { value: TokenSet | undefined } {
@@ -49,12 +51,12 @@ function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 }
 
-export function metadata(base = BASE, over: Record<string, unknown> = {}): Record<string, unknown> {
+export function metadata(auth = AUTH, over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    issuer: base,
-    authorization_endpoint: 'https://ai.quberi.com/oauth/authorize',
-    token_endpoint: `${base}/api/v1/oauth/token`,
-    revocation_endpoint: `${base}/api/v1/oauth/revoke`,
+    issuer: auth,
+    authorization_endpoint: `${auth}/oauth/authorize`,
+    token_endpoint: `${auth}/api/v1/oauth/token`,
+    revocation_endpoint: `${auth}/api/v1/oauth/revoke`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
@@ -65,7 +67,12 @@ export function metadata(base = BASE, over: Record<string, unknown> = {}): Recor
 }
 
 /** A stand-in for Quberi's OAuth and search endpoints. */
-export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = {}): FakeQuberi {
+export function fakeQuberi(
+  base = BASE,
+  metadataOver: Record<string, unknown> = {},
+  /** The sign-in server's origin; the hosted layout (API and sign-in on different origins) by default. */
+  auth = base === BASE ? AUTH : base,
+): FakeQuberi {
   const fake: FakeQuberi = {
     calls: [],
     uploads: [],
@@ -78,7 +85,9 @@ export function fakeQuberi(base = BASE, metadataOver: Record<string, unknown> = 
       const body = init?.body === undefined ? '' : isForm ? '[multipart]' : String(init.body)
       fake.calls.push({ url, method: init?.method ?? 'GET', headers, body })
       if (url.endsWith('/.well-known/oauth-authorization-server')) {
-        return json(200, metadata(base, metadataOver))
+        // Only the sign-in server serves discovery with itself as issuer; the API's own copy,
+        // reached by an old plugin, would name the sign-in server and so not match.
+        return json(200, metadata(auth, metadataOver))
       }
       if (url.endsWith('/oauth/token')) {
         const form = new URLSearchParams(body)

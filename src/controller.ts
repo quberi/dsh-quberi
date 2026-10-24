@@ -30,6 +30,7 @@ import {
   type TokenResponse,
   type TokenSet,
   TOKEN_SET_VERSION,
+  defaultAuthUrl,
   normaliseBaseUrl,
   oauthErrorFrom,
   parseJsonObject,
@@ -80,6 +81,11 @@ export interface TokenStore {
 export interface ControllerOptions {
   /** Quberi API origin, e.g. `https://api.quberi.com`. */
   baseUrl: string
+  /**
+   * Origin of the sign-in server, where discovery, token and revocation live. Left out, it is
+   * worked out from `baseUrl` (the hosted service signs in on `https://ai.quberi.com`).
+   */
+  authUrl?: string
   clientId: string
   scope: string
   /** Loopback port for the sign-in callback; 0 lets the OS pick a free one. */
@@ -366,6 +372,7 @@ function callbackPage(response: ServerResponse, status: number, title: string, m
 
 export class QuberiController {
   private readonly baseUrl: string
+  private readonly authUrl: string
   private readonly fetchImpl: typeof fetch
   private readonly now: () => number
   private readonly lifetime = new AbortController()
@@ -380,6 +387,7 @@ export class QuberiController {
 
   constructor(private readonly options: ControllerOptions) {
     this.baseUrl = normaliseBaseUrl(options.baseUrl)
+    this.authUrl = options.authUrl ? normaliseBaseUrl(options.authUrl) : defaultAuthUrl(this.baseUrl)
     this.fetchImpl = options.fetch ?? fetch
     this.now = options.now ?? Date.now
     this.modeValue = options.searchMode ?? 'both'
@@ -717,9 +725,9 @@ export class QuberiController {
 
   private async metadata(): Promise<Metadata> {
     if (this.metadataValue !== undefined) return this.metadataValue
-    const response = await this.request(`${this.baseUrl}/.well-known/oauth-authorization-server`)
+    const response = await this.request(`${this.authUrl}/.well-known/oauth-authorization-server`)
     if (!response.ok) throw new Error(`Quberi OAuth discovery failed (HTTP ${response.status})`)
-    this.metadataValue = parseMetadata(parseJsonObject(await response.text(), 'Quberi OAuth metadata'), this.baseUrl)
+    this.metadataValue = parseMetadata(parseJsonObject(await response.text(), 'Quberi OAuth metadata'), this.authUrl)
     return this.metadataValue
   }
 

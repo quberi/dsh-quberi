@@ -11,7 +11,7 @@ import {
 } from '../src/controller.js'
 import type { ControllerOptions, SearchResult } from '../src/controller.js'
 
-import { BASE, fakeQuberi, memoryStore, s256, tokens } from './helpers.js'
+import { AUTH, BASE, fakeQuberi, memoryStore, s256, tokens } from './helpers.js'
 import type { FakeQuberi } from './helpers.js'
 
 const live: QuberiController[] = []
@@ -201,6 +201,66 @@ describe('sign in', () => {
     expect(res.html + res.location).not.toContain('qbr_')
   })
 
+  describe('where it signs in', () => {
+    /** The hosted layout: the API on one origin, the sign-in server (the issuer) on another. */
+    const origins = (fake: FakeQuberi) => fake.calls.map((c) => new URL(c.url).origin)
+
+    it('asks the sign-in server, not the API, for discovery, and exchanges the code there', async () => {
+      const { controller, fake } = make()
+      const { state, redirect } = await startLogin(controller)
+      await callback(redirect, { code: 'c', state })
+      const discovery = fake.calls.filter((c) => c.url.endsWith('/.well-known/oauth-authorization-server'))
+      expect(discovery.map((c) => c.url)).toEqual([`${AUTH}/.well-known/oauth-authorization-server`])
+      expect(fake.calls.find((c) => c.url.endsWith('/oauth/token'))?.url).toBe(`${AUTH}/api/v1/oauth/token`)
+      // Nothing about signing in goes to the API origin.
+      expect(origins(fake).filter((o) => o === BASE)).toEqual([])
+    })
+
+    it('does not mind what the API answers at its own discovery address', async () => {
+      // Production today: the API origin also serves a copy that names the sign-in server as issuer.
+      // Taking that copy as the API's own is what broke sign-in; it is never asked for now.
+      const fake = fakeQuberi()
+      const inner = fake.fetch
+      fake.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input).startsWith(BASE) && String(input).includes('/.well-known/')
+          ? new Response('not found', { status: 404 })
+          : inner(input, init)) as typeof fetch
+      const { controller } = make({}, fake)
+      await expect(controller.beginLogin()).resolves.toContain('/oauth/authorize')
+    })
+
+    it('searches still go to the API origin', async () => {
+      const { controller, store, fake } = make()
+      store.value = tokens()
+      await controller.search('remote work', 5)
+      expect(fake.calls.find((c) => c.url.endsWith('/external/search'))?.url).toBe(`${BASE}/api/v1/external/search`)
+    })
+
+    it('uses the one origin of a self-hosted Quberi for both', async () => {
+      const own = 'https://quberi.example.org'
+      const fake = fakeQuberi(own)
+      const { controller, store } = make({ baseUrl: own }, fake)
+      const { state, redirect } = await startLogin(controller)
+      await callback(redirect, { code: 'c', state })
+      expect(store.value?.accessToken).toBe('qbr_at_1')
+      expect(fake.calls.every((c) => new URL(c.url).origin === own || c.url.startsWith('http://127.0.0.1'))).toBe(true)
+    })
+
+    it('takes an explicit sign-in origin when the two differ on a self-hosted Quberi', async () => {
+      const api = 'https://api.corp.example'
+      const web = 'https://quberi.corp.example'
+      const fake = fakeQuberi(api, {}, web)
+      const { controller } = make({ baseUrl: api, authUrl: web }, fake)
+      await controller.beginLogin()
+      expect(fake.calls[0]?.url).toBe(`${web}/.well-known/oauth-authorization-server`)
+    })
+
+    it('refuses a sign-in server that names someone else as issuer', async () => {
+      const fake = fakeQuberi(BASE, { issuer: BASE })
+      const { controller } = make({}, fake)
+      await expect(controller.beginLogin()).rejects.toThrow(/issuer must be https:\/\/ai\.quberi\.com/)
+    })
+  })
   it('refuses to sign in when discovery points tokens at another site', async () => {
     const fake = fakeQuberi(BASE, { token_endpoint: 'https://evil.example/token' })
     const { controller } = make({}, fake)

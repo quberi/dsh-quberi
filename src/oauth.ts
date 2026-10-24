@@ -114,15 +114,30 @@ export function normaliseBaseUrl(raw: string): string {
   return url.origin
 }
 
+/** The hosted service's API origin, whose sign-in server lives on the web app's origin. */
+const HOSTED_API = 'https://api.quberi.com'
+const HOSTED_AUTH = 'https://ai.quberi.com'
+
 /**
- * Check the discovery document. We only ever send a token or a code to
- * endpoints on the same origin as the configured Quberi API; the browser page
- * (`authorization_endpoint`) may live on the web app's origin, because
- * nothing secret is sent to it by this plugin.
+ * The origin of the sign-in (OAuth) server for a given API address.
+ *
+ * On the hosted service the API answers on `api.quberi.com` but the sign-in server, whose
+ * discovery document names itself as `issuer`, is `ai.quberi.com`. A self-hosted Quberi
+ * normally answers everything on one origin, so there the sign-in server is the API itself.
  */
-export function parseMetadata(record: Record<string, unknown>, baseUrl: string): Metadata {
-  if (stringField(record, 'issuer') !== baseUrl) {
-    throw new Error(`Quberi OAuth metadata issuer must be ${baseUrl}`)
+export function defaultAuthUrl(baseUrl: string): string {
+  return baseUrl === HOSTED_API ? HOSTED_AUTH : baseUrl
+}
+
+/**
+ * Check the discovery document. `authUrl` is where the document was fetched from, and it
+ * must name itself as the issuer (RFC 8414). We only ever send a token or a code to
+ * endpoints on that same origin; the browser page (`authorization_endpoint`) may live
+ * elsewhere, because nothing secret is sent to it by this plugin.
+ */
+export function parseMetadata(record: Record<string, unknown>, authUrl: string): Metadata {
+  if (stringField(record, 'issuer') !== authUrl) {
+    throw new Error(`Quberi OAuth metadata issuer must be ${authUrl}`)
   }
   const methods = record.code_challenge_methods_supported
   if (!Array.isArray(methods) || !methods.includes('S256')) {
@@ -138,8 +153,8 @@ export function parseMetadata(record: Record<string, unknown>, baseUrl: string):
   }
   const sameOrigin = (field: string): string => {
     const url = new URL(stringField(record, field))
-    if (url.origin !== baseUrl) {
-      throw new Error(`Quberi OAuth metadata field "${field}" must be on ${baseUrl}`)
+    if (url.origin !== authUrl) {
+      throw new Error(`Quberi OAuth metadata field "${field}" must be on ${authUrl}`)
     }
     return url.href
   }
@@ -148,7 +163,7 @@ export function parseMetadata(record: Record<string, unknown>, baseUrl: string):
     throw new Error('Quberi OAuth metadata field "authorization_endpoint" must use https')
   }
   return Object.freeze({
-    issuer: baseUrl,
+    issuer: authUrl,
     authorizationEndpoint: authorization.href,
     tokenEndpoint: sameOrigin('token_endpoint'),
     revocationEndpoint: sameOrigin('revocation_endpoint'),

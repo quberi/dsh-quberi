@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  defaultAuthUrl,
   normaliseBaseUrl,
   oauthErrorFrom,
   parseMetadata,
@@ -10,7 +11,7 @@ import {
   statesMatch,
 } from '../src/oauth.js'
 
-import { BASE, metadata } from './helpers.js'
+import { AUTH, BASE, metadata } from './helpers.js'
 
 describe('PKCE', () => {
   it('matches the RFC 7636 test vector', () => {
@@ -43,11 +44,35 @@ describe('baseUrl', () => {
   })
 })
 
+describe('where signing in happens', () => {
+  it('is the web origin for the hosted service, and the API itself otherwise', () => {
+    expect(defaultAuthUrl(BASE)).toBe(AUTH)
+    expect(defaultAuthUrl('https://quberi.example.org')).toBe('https://quberi.example.org')
+    expect(defaultAuthUrl('http://127.0.0.1:8000')).toBe('http://127.0.0.1:8000')
+  })
+})
+
 describe('discovery document', () => {
   it('accepts a good one; the browser page may be on the web origin', () => {
-    const m = parseMetadata(metadata(), BASE)
-    expect(m.tokenEndpoint).toBe(`${BASE}/api/v1/oauth/token`)
+    const m = parseMetadata(metadata(), AUTH)
+    expect(m.tokenEndpoint).toBe(`${AUTH}/api/v1/oauth/token`)
     expect(m.authorizationEndpoint).toBe('https://ai.quberi.com/oauth/authorize')
+  })
+
+  it('accepts a login page on another origin, since nothing secret goes there', () => {
+    const m = parseMetadata(metadata(AUTH, { authorization_endpoint: 'https://web.example/oauth/authorize' }), AUTH)
+    expect(m.authorizationEndpoint).toBe('https://web.example/oauth/authorize')
+  })
+
+  it('wants the sign-in server to name itself, not the API', () => {
+    // The hosted service says issuer = ai.quberi.com on both of its origins. Read as the API's, it is wrong.
+    expect(() => parseMetadata(metadata(AUTH), BASE)).toThrow(/issuer must be https:\/\/api\.quberi\.com/)
+    expect(() => parseMetadata(metadata(BASE), AUTH)).toThrow(/issuer must be https:\/\/ai\.quberi\.com/)
+  })
+
+  it('still reads the one-origin layout a self-hosted Quberi has', () => {
+    const own = 'https://quberi.example.org'
+    expect(parseMetadata(metadata(own), own).tokenEndpoint).toBe(`${own}/api/v1/oauth/token`)
   })
 
   it.each([
@@ -59,7 +84,7 @@ describe('discovery document', () => {
     ['revocation endpoint elsewhere', { revocation_endpoint: 'https://evil.example/revoke' }],
     ['plain-http login page', { authorization_endpoint: 'http://ai.quberi.com/oauth/authorize' }],
   ])('rejects %s (we would send a code or token there)', (_label, over) => {
-    expect(() => parseMetadata(metadata(BASE, over), BASE)).toThrow()
+    expect(() => parseMetadata(metadata(AUTH, over), AUTH)).toThrow()
   })
 })
 

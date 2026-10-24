@@ -335,6 +335,10 @@ Configuration).
 
 Defaults are right for the hosted service. For a self-hosted Quberi, point
 `baseUrl` at your API (https, or `http://127.0.0.1:<port>` for development).
+Signing in happens on the server that publishes `/.well-known/oauth-authorization-server`
+and names itself as `issuer`. On the hosted service that is `https://ai.quberi.com`; for a
+self-hosted Quberi it is the same origin as `baseUrl`, so you normally set nothing. Only if
+your sign-in server is on a different origin than your API, set `authUrl` to it.
 `openBrowser`, `autoLogin` and `focusApp` (all on by default) switch off the
 automatic browser, sign-in on first use, and returning to Harness. `uploadFiles`
 (on by default) offers the upload tool; off removes it. `searchMode` (`both` by default,
@@ -346,6 +350,7 @@ or `text` or `image`) is where searches look until you change it with `/quberi m
       name: dsh-quberi
       config:
         baseUrl: https://api.example.com
+        # authUrl: https://quberi.example.com   # only if sign-in is on another origin than the API
         # openBrowser: false
         # autoLogin: false
         # focusApp: false

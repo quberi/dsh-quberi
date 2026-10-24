@@ -70,6 +70,11 @@ async function guarded<T>(signal: AbortSignal, body: () => Promise<T>): Promise<
 export interface Config {
   /** Quberi API origin. */
   baseUrl: string
+  /**
+   * Origin of Quberi's sign-in server. Leave empty to work it out from `baseUrl`: the hosted
+   * service signs in on `https://ai.quberi.com`, a self-hosted Quberi on the same origin as its API.
+   */
+  authUrl: string
   /** The sign-in client Quberi knows this plugin as. */
   clientId: string
   /** Loopback port for the browser callback; 0 asks the OS for a free one. */
@@ -100,6 +105,7 @@ export interface Config {
 
 export const Config: z<Config> = z.object({
   baseUrl: z.string().default('https://api.quberi.com'),
+  authUrl: z.string().default(''),
   clientId: z.string().pattern(/^[A-Za-z0-9._~-]+$/u).default('quberi-harness'),
   callbackPort: z.number().step(1).min(0).max(65_535).default(0),
   loginTimeoutMs: z.number().min(1).max(3_600_000).default(5 * 60_000),
@@ -151,6 +157,7 @@ function recordStore(ctx: Context): TokenStore {
 export async function apply(ctx: Context, config: Config): Promise<void> {
   const controller = new QuberiController({
     baseUrl: config.baseUrl,
+    authUrl: config.authUrl === '' ? undefined : config.authUrl,
     clientId: config.clientId,
     scope: config.uploadFiles ? 'knowledge:read knowledge:write knowledge:upload' : 'knowledge:read knowledge:write',
     callbackPort: config.callbackPort,
